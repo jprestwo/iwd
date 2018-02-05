@@ -2055,10 +2055,30 @@ ft_error:
 							netdev, NULL);
 }
 
+#include <stdio.h>
+
 static void netdev_associate_event(struct l_genl_msg *msg,
 							struct netdev *netdev)
 {
-	l_debug("");
+	struct l_genl_attr attr;
+	uint16_t type;
+	uint16_t len;
+	const void *data;
+
+	l_info("\n\n\n\nASSOCIATE:\n");
+
+	if (!l_genl_attr_init(&attr, msg))
+		return;
+
+	while (l_genl_attr_next(&attr, &type, &len, &data)) {
+		int i;
+		l_info("type=%u\n", type);
+		for (i = 0; i < len; i++) {
+			printf("0x%02x, ", ((uint8_t *)data)[i]);
+		}
+		printf("\n");
+	}
+	printf("\nEND\n");
 }
 
 static unsigned int ie_rsn_akm_suite_to_nl80211(enum ie_rsn_akm_suite akm)
