@@ -268,6 +268,26 @@ class Hwsim(iwd.AsyncOpAbstract):
     def object_manager(self):
         return self._object_manager_if
 
+    def spoof_associate(self, radio, freq, station):
+        '''
+            Send a spoofed arbitrary frame to a station
+        '''
+        radio_path = None
+        objects = self.object_manager.GetManagedObjects()
+
+        for path in objects:
+            obj = objects[path]
+            for interface in obj:
+                if interface == HWSIM_INTERFACE_INTERFACE:
+                    if obj[interface]['Address'] == radio.addresses[0]:
+                        radio_path = path
+                        break
+
+        iface = dbus.Interface(self._bus.get_object(HWSIM_SERVICE, radio_path),
+                HWSIM_INTERFACE_INTERFACE)
+
+        iface.SendAssociate(bytearray.fromhex(station.replace(':', '')), freq, -30, bytearray.fromhex('00'))
+
     def spoof_disassociate(self, radio, freq, station):
         '''
             Send a spoofed disassociate frame to a station
