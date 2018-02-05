@@ -1178,6 +1178,8 @@ static void hwsim_frame_unref(struct hwsim_frame *frame)
 	l_free(frame);
 }
 
+
+
 static void send_frame_callback(struct l_genl_msg *msg, void *user_data)
 {
 	struct send_frame_info *info = user_data;
@@ -1219,6 +1221,8 @@ static void send_custom_frame_callback(struct l_genl_msg *msg, void *user_data)
 		return;
 	}
 
+	printf("SUCESS\n\n");
+
 	reply = l_dbus_message_new_method_return(message);
 	l_dbus_message_set_arguments(reply, "");
 	dbus_pending_reply(&message, reply);
@@ -1259,6 +1263,8 @@ static bool send_custom_frame(const uint8_t *addr, uint32_t freq,
 	/* hwsim expects the first nibble of the address byte to be '4' */
 	info->radio->addrs[1][0] |= 0x40;
 
+	printf("\n\nSPOOFING FRAME\n\n");
+
 	if (!send_frame(info, send_custom_frame_callback,
 			send_custom_frame_destroy)) {
 		l_free(frame);
@@ -1268,6 +1274,77 @@ static bool send_custom_frame(const uint8_t *addr, uint32_t freq,
 		return false;
 	}
 
+	return true;
+}
+#if 0
+static void send_associate_callback(struct l_genl_msg *msg, void *user_data)
+{
+	//struct send_frame_info *info = user_data;
+
+	printf("ASSOCIATE CALLBACK\n\n\n");
+
+	if (l_genl_msg_get_error(msg) < 0)
+		printf("ERROR SENDING: %d\n", l_genl_msg_get_error(msg));
+		/* Radio address or frequency didn't match */
+		//l_debug("HWSIM_CMD_FRAME failed for destination %s",
+		//	util_address_to_string(info->radio->addrs[0]));
+	else {
+		printf("SEND SUCCESS\n");
+		//info->frame->acked = true;
+		//info->frame->ack_radio = info->radio;
+	}
+
+	//info->frame->pending_callback_count--;
+}
+#endif
+
+static bool send_associate(const uint8_t *addr, uint32_t freq,
+		int32_t signal, const void *payload, uint32_t len,
+		void *user_data)
+{
+	//uint8_t address[] = { 0x02, 0, 0, 0, 0, 0 };
+	uint8_t frame[] = { 0x10, 0x00, 0x3a, 0x01, 0x02, 0x00, 0x00, 0x00,
+			0x01, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02,
+			0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x11, 0x04,
+			0x00, 0x00, 0x01, 0xc0, 0x01, 0x08, 0x82, 0x84, 0x8b,
+			0x96, 0x0c, 0x12, 0x18, 0x24, 0x32, 0x04, 0x30, 0x48,
+			0x60, 0x6c, 0x7f, 0x08, 0x04, 0x00, 0x00, 0x02, 0x00,
+			0x00, 0x00, 0x40, 0x5a, 0x03, 0x24, 0x01, 0x00 };
+
+	return send_custom_frame(addr, freq, signal, frame, sizeof(frame), user_data);
+#if 0
+	struct l_genl_msg *msg;
+	unsigned int id;
+	//uint8_t receiver[6] = { 0x42, 0x00, 0, 0, 1, 0 };
+	uint8_t transmitter[6] = { 0x42, 0x00, 0x00, 0x00, 0x00, 0x00 };
+	uint8_t frame[] = { 0xb0, 0x00, 0x3a, 0x01, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x01, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00
+	};
+	uint8_t flags[] = {0x00, 0x00, 0x00, 0x00};
+	uint8_t freq[] = {0x6c, 0x09, 0x00, 0x00};
+	uint8_t tx_info[] = { 0x00, 0x0b, 0xff, 0x00, 0xff, 0x00, 0xff, 0x00 };
+	uint8_t cookie[] = { 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
+
+	msg = l_genl_msg_new_sized(HWSIM_CMD_FRAME, 800);
+	//l_genl_msg_append_attr(msg, HWSIM_ATTR_ADDR_RECEIVER, ETH_ALEN,
+	//			receiver);
+	l_genl_msg_append_attr(msg, HWSIM_ATTR_ADDR_TRANSMITTER, ETH_ALEN,
+			transmitter);
+	l_genl_msg_append_attr(msg, HWSIM_ATTR_FRAME, sizeof(frame), frame);
+
+	l_genl_msg_append_attr(msg, HWSIM_ATTR_FLAGS, sizeof(flags), flags);
+
+	l_genl_msg_append_attr(msg, HWSIM_ATTR_FREQ, 4,
+			freq);
+	l_genl_msg_append_attr(msg, HWSIM_ATTR_TX_INFO, sizeof(tx_info), tx_info);
+
+	l_genl_msg_append_attr(msg, HWSIM_ATTR_COOKIE, sizeof(cookie), cookie);
+
+	id = l_genl_family_send(hwsim, msg, send_associate_callback, NULL, NULL);
+	if (!id) {
+		l_error("Sending HWSIM_CMD_FRAME failed");
+		return false;
+	}
+#endif
 	return true;
 }
 
@@ -1361,7 +1438,9 @@ static void unicast_handler(struct l_genl_msg *msg, void *user_data)
 	struct l_genl_attr attr;
 	uint16_t type, len;
 	const void *data;
+
 	const uint8_t *transmitter = NULL, *freq = NULL, *flags = NULL;
+	//int i;
 
 	if (l_genl_msg_get_command(msg) != HWSIM_CMD_FRAME)
 		return;
@@ -1371,7 +1450,16 @@ static void unicast_handler(struct l_genl_msg *msg, void *user_data)
 
 	frame = l_new(struct hwsim_frame, 1);
 
+	//printf("START\n");
+
 	while (l_genl_attr_next(&attr, &type, &len, &data)) {
+		//printf("type=%u\n", type);
+		//for (i = 0; i < len; i++) {
+		//	printf("0x%02x, ", ((uint8_t *)data)[i]);
+		//}
+		//printf("\n");
+
+
 		switch (type) {
 		case HWSIM_ATTR_ADDR_TRANSMITTER:
 			if (len != ETH_ALEN)
@@ -1462,6 +1550,8 @@ static void unicast_handler(struct l_genl_msg *msg, void *user_data)
 	memcpy(frame->dst_ether_addr, mpdu->address_1, ETH_ALEN);
 
 	process_frame(frame);
+
+	//printf("\n\nEND\n");
 }
 
 static void radio_manager_create_callback(struct l_genl_msg *msg,
@@ -1701,6 +1791,49 @@ static void setup_radio_interface(struct l_dbus_interface *interface)
 					radio_property_get_regdom, NULL);
 }
 
+static struct l_dbus_message *interface_send_assocaite(struct l_dbus *dbus,
+		struct l_dbus_message *message,
+		void *user_data)
+{
+	struct l_dbus_message_iter addr;
+	struct l_dbus_message_iter data;
+	const void *frame;
+	const uint8_t *receiver;
+	uint32_t len;
+	uint32_t freq;
+	int32_t signal;
+
+	if (!l_dbus_message_get_arguments(message, "ayuiay", &addr, &freq,
+			&signal, &data)) {
+		printf("args\n");
+		goto invalid_args;
+	}
+
+	if (!l_dbus_message_iter_get_fixed_array(&addr,
+			(const void **)&receiver, &len)) {
+		printf("receiver\n");
+		goto invalid_args;
+	}
+
+	if (len != 6) {
+		printf("rx len\n");
+		goto invalid_args;
+	}
+
+	if (!l_dbus_message_iter_get_fixed_array(&data, &frame, &len)) {
+		printf("Frame\n");
+		goto invalid_args;
+	}
+
+	send_associate(receiver, freq, signal, frame, len, message);
+
+	return NULL;
+
+invalid_args:
+	return dbus_error_invalid_args(message);
+
+}
+
 static struct l_dbus_message *interface_send_frame(struct l_dbus *dbus,
 		struct l_dbus_message *message,
 		void *user_data)
@@ -1766,6 +1899,7 @@ static bool interface_property_get_address(struct l_dbus *dbus,
 
 static void setup_interface_interface(struct l_dbus_interface *interface)
 {
+	l_dbus_interface_method(interface, "SendAssociate", 0, interface_send_assocaite, "", "ayuiay", "station", "frequency", "signal", "frame");
 	l_dbus_interface_method(interface, "SendFrame", 0,
 			interface_send_frame, "", "ayuiay", "station",
 			"frequency", "signal", "frame");
