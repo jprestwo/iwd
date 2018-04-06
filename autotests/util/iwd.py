@@ -366,6 +366,13 @@ class Device(IWDDBusAbstract):
                                     error_handler=self._failure)
         self._wait_for_async_op()
 
+    def start_adhoc(self, ssid, psk):
+        self._iface.CreateAdHocNetwork(ssid, psk,
+                                       dbus_interface=self._iface_name,
+                                       reply_handler=self._success,
+                                       error_handler=self._failure)
+        self._wait_for_async_op()
+
     def __str__(self, prefix = ''):
         return prefix + 'Device: ' + self.device_path + '\n'\
                + prefix + '\tName:\t\t' + self.name + '\n'\
