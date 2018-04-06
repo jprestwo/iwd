@@ -44,6 +44,7 @@
 #include "src/device.h"
 #include "src/watchlist.h"
 #include "src/ap.h"
+#include "src/adhoc.h"
 
 struct device_watchlist_item {
 	uint32_t id;
@@ -93,6 +94,8 @@ struct device {
 	bool ap_directed_roaming : 1;
 
 	uint32_t ap_roam_watch;
+
+	enum device_mode mode;
 };
 
 struct signal_agent {
@@ -2116,6 +2119,45 @@ static struct l_dbus_message *device_stop_ap(struct l_dbus *dbus,
 	return NULL;
 }
 
+static void device_set_mode_adhoc(struct device *device)
+{
+	if (device->mode == DEVICE_MODE_ADHOC)
+		return;
+
+	if (device->state != DEVICE_STATE_DISCONNECTED &&
+			device->state != DEVICE_STATE_AUTOCONNECT) {
+		l_warn("error changing device mode, incorrect station state");
+		return;
+	}
+
+	device->mode = DEVICE_MODE_ADHOC;
+	device_enter_state(device, DEVICE_STATE_ADHOC);
+
+	/* Drop all state we can related to client mode */
+	if (device->scan_pending)
+		dbus_pending_reply(&device->scan_pending,
+				dbus_error_aborted(device->scan_pending));
+
+	l_hashmap_foreach_remove(device->networks,
+					device_remove_network, device);
+
+	l_queue_destroy(device->autoconnect_list, l_free);
+	device->autoconnect_list = l_queue_new();
+
+	l_queue_destroy(device->bss_list, bss_free);
+	device->bss_list = l_queue_new();
+
+	l_queue_destroy(device->networks_sorted, NULL);
+	device->networks_sorted = l_queue_new();
+
+	adhoc_add_interface(device);
+}
+
+static void device_set_mode_sta(struct device *device)
+{
+	/* TODO */
+}
+
 static bool device_property_get_name(struct l_dbus *dbus,
 					struct l_dbus_message *message,
 					struct l_dbus_message_builder *builder,
@@ -2343,6 +2385,52 @@ static bool device_property_get_adapter(struct l_dbus *dbus,
 	return true;
 }
 
+static bool device_property_get_mode(struct l_dbus *dbus,
+					struct l_dbus_message *message,
+					struct l_dbus_message_builder *builder,
+					void *user_data)
+{
+	struct device *device = user_data;
+	const char *modestr = "unknown";
+
+	switch (device->mode) {
+	case DEVICE_MODE_STA:
+		modestr = "station";
+		break;
+	case DEVICE_MODE_ADHOC:
+		modestr = "ad-hoc";
+		break;
+	}
+
+	l_dbus_message_builder_append_basic(builder, 's', modestr);
+
+	return true;
+}
+
+static struct l_dbus_message *device_property_set_mode(struct l_dbus *dbus,
+					struct l_dbus_message *message,
+					struct l_dbus_message_iter *new_value,
+					l_dbus_property_complete_cb_t complete,
+					void *user_data)
+{
+	struct device *device = user_data;
+	const char* mode;
+
+	if (!l_dbus_message_iter_get_variant(new_value, "s", &mode))
+		return dbus_error_invalid_args(message);
+
+	if (!strcmp(mode, "ad-hoc"))
+		device_set_mode_adhoc(device);
+	else if (!strcmp(mode, "station"))
+		device_set_mode_sta(device);
+	else
+		return dbus_error_invalid_args(message);
+
+	complete(dbus, message, NULL);
+
+	return NULL;
+}
+
 static void setup_device_interface(struct l_dbus_interface *interface)
 {
 	l_dbus_interface_method(interface, "Scan", 0,
@@ -2362,7 +2450,6 @@ static void setup_device_interface(struct l_dbus_interface *interface)
 				device_start_ap, "", "ss", "ssid", "wpa2_psk");
 	l_dbus_interface_method(interface, "StopAccessPoint", 0,
 				device_stop_ap, "", "");
-
 	l_dbus_interface_property(interface, "Name", 0, "s",
 					device_property_get_name, NULL);
 	l_dbus_interface_property(interface, "Address", 0, "s",
@@ -2382,6 +2469,9 @@ static void setup_device_interface(struct l_dbus_interface *interface)
 					device_property_get_state, NULL);
 	l_dbus_interface_property(interface, "Adapter", 0, "o",
 					device_property_get_adapter, NULL);
+	l_dbus_interface_property(interface, "Mode", 0, "s",
+					device_property_get_mode,
+					device_property_set_mode);
 }
 
 static void device_netdev_notify(struct netdev *netdev,

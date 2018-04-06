@@ -45,6 +45,11 @@ enum device_state {
 	DEVICE_STATE_ADHOC
 };
 
+enum device_mode {
+	DEVICE_MODE_STA,
+	DEVICE_MODE_ADHOC
+};
+
 typedef void (*device_watch_func_t)(struct device *device,
 					enum device_event event,
 					void *userdata);
@@ -79,7 +84,7 @@ void device_connect_network(struct device *device, struct network *network,
 				struct scan_bss *bss,
 				struct l_dbus_message *message);
 int device_disconnect(struct device *device);
-
+void device_adhoc_peer_changed(struct device *device);
 struct device *device_create(struct wiphy *wiphy, struct netdev *netdev);
 void device_remove(struct device *device);
 
