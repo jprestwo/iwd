@@ -170,6 +170,8 @@ static const char *device_state_to_string(enum device_state state)
 		return "roaming";
 	case DEVICE_STATE_AP:
 		return "accesspoint";
+	case DEVICE_STATE_ADHOC:
+		return "adhoc";
 	}
 
 	return "invalid";
@@ -529,6 +531,7 @@ static void device_enter_state(struct device *device, enum device_state state)
 	case DEVICE_STATE_ROAMING:
 		break;
 	case DEVICE_STATE_AP:
+	case DEVICE_STATE_ADHOC:
 		periodic_scan_stop(device);
 		break;
 	}
@@ -2316,6 +2319,9 @@ static bool device_property_get_state(struct l_dbus *dbus,
 		break;
 	case DEVICE_STATE_AP:
 		statestr = "accesspoint";
+		break;
+	case DEVICE_STATE_ADHOC:
+		statestr = "adhoc";
 		break;
 	}
 

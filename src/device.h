@@ -42,6 +42,7 @@ enum device_state {
 	DEVICE_STATE_DISCONNECTING,
 	DEVICE_STATE_ROAMING,
 	DEVICE_STATE_AP,
+	DEVICE_STATE_ADHOC
 };
 
 typedef void (*device_watch_func_t)(struct device *device,
