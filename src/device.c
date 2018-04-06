@@ -44,6 +44,7 @@
 #include "src/device.h"
 #include "src/watchlist.h"
 #include "src/ap.h"
+#include "src/adhoc.h"
 
 struct device_watchlist_item {
 	uint32_t id;
@@ -2055,6 +2056,45 @@ static struct l_dbus_message *device_signal_agent_unregister(
 	return l_dbus_message_new_method_return(message);
 }
 
+static struct l_dbus_message *device_set_mode_adhoc(struct device *device,
+		struct l_dbus_message *message)
+{
+	if (device->mode == DEVICE_MODE_ADHOC)
+		return dbus_error_already_exists(message);
+
+	if (device->state != DEVICE_STATE_DISCONNECTED &&
+			device->state != DEVICE_STATE_AUTOCONNECT)
+		return dbus_error_busy(message);
+
+	periodic_scan_stop(device);
+
+	/* Drop all state we can related to client mode */
+
+	if (device->scan_pending)
+		dbus_pending_reply(&device->scan_pending,
+				dbus_error_aborted(device->scan_pending));
+
+	l_hashmap_foreach_remove(device->networks,
+					device_remove_network, device);
+
+	l_queue_destroy(device->autoconnect_list, l_free);
+	device->autoconnect_list = l_queue_new();
+
+	l_queue_destroy(device->bss_list, bss_free);
+	device->bss_list = l_queue_new();
+
+	l_queue_destroy(device->networks_sorted, NULL);
+	device->networks_sorted = l_queue_new();
+
+	netdev_set_iftype(device->netdev, NETDEV_IFTYPE_ADHOC);
+
+	device->mode = DEVICE_MODE_ADHOC;
+
+	adhoc_add_interface(device);
+
+	return NULL;
+}
+
 static struct l_dbus_message *device_set_mode_ap(struct device *device,
 		struct l_dbus_message *message)
 {
@@ -2099,14 +2139,23 @@ static struct l_dbus_message *device_set_mode_ap(struct device *device,
 static struct l_dbus_message *device_set_mode_sta(struct device *device,
 		struct l_dbus_message *message)
 {
-	if (device->mode != DEVICE_MODE_AP)
-		return dbus_error_not_found(message);
+	if (device->mode == DEVICE_MODE_STATION)
+		return dbus_error_already_exists(message);
 
-	netdev_set_iftype(device->netdev, NETDEV_IFTYPE_STATION);
+	switch (device->mode) {
+	case DEVICE_MODE_AP:
+		netdev_set_iftype(device->netdev, NETDEV_IFTYPE_STATION);
+		ap_remove_interface(device);
+		break;
+	case DEVICE_MODE_ADHOC:
+		netdev_set_iftype(device->netdev, NETDEV_IFTYPE_STATION);
+		adhoc_remove_interface(device);
+		break;
+	default:
+		return dbus_error_not_found(message);
+	}
 
 	device->mode = DEVICE_MODE_STATION;
-
-	ap_remove_interface(device);
 
 	l_debug("");
 
@@ -2355,6 +2404,8 @@ static bool device_property_get_mode(struct l_dbus *dbus,
 		break;
 	case DEVICE_MODE_AP:
 		modestr = "ap";
+	case DEVICE_MODE_ADHOC:
+		modestr = "ad-hoc";
 		break;
 	}
 
@@ -2382,6 +2433,10 @@ static struct l_dbus_message *device_property_set_mode(struct l_dbus *dbus,
 			return reply;
 	} else if (!strcmp(mode, "ap")) {
 		reply = device_set_mode_ap(device, message);
+		if (reply)
+			return reply;
+	} else if (!strcmp(mode, "ad-hoc")) {
+		reply = device_set_mode_adhoc(device, message);
 		if (reply)
 			return reply;
 	} else {
