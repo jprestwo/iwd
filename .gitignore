@@ -45,5 +45,6 @@ unit/test-wsc
 unit/test-eap-mschapv2
 unit/test-eap-sim
 unit/test-client
+unit/test-eap-pwd
 test-suite.log
 src/builtin.h
