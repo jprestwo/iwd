@@ -403,7 +403,7 @@ static void start_qemu(void)
 	argv[pos++] = "-append";
 	argv[pos++] = (char *) cmdline;
 	argv[pos++] = "-cpu";
-	argv[pos++] = has_virt ? "host" : "max";
+	argv[pos++] = has_virt ? "host" : "qemu64";
 
 	argv[pos] = NULL;
 
