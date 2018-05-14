@@ -4890,7 +4890,8 @@ static bool nlmon_receive(struct l_io *io, void *user_data)
 
 	nlmsg_len = bytes_read;
 
-	for (nlmsg = iov.iov_base; NLMSG_OK(nlmsg, nlmsg_len);
+	for (nlmsg = iov.iov_base; NLMSG_OK(nlmsg, nlmsg_len) &&
+				nlmsg_len >= NLMSG_ALIGN(nlmsg->nlmsg_len);
 				nlmsg = NLMSG_NEXT(nlmsg, nlmsg_len)) {
 		switch (proto_type) {
 		case NETLINK_ROUTE:
