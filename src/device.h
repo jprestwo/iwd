@@ -83,5 +83,9 @@ int device_disconnect(struct device *device);
 struct device *device_create(struct wiphy *wiphy, struct netdev *netdev);
 void device_remove(struct device *device);
 
+struct handshake_state *device_handshake_setup(struct device *device,
+						struct network *network,
+						struct scan_bss *bss);
+
 bool device_init(void);
 bool device_exit(void);

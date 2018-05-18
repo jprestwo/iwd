@@ -643,7 +643,7 @@ static enum ie_rsn_akm_suite device_select_akm_suite(struct network *network,
 	return 0;
 }
 
-static struct handshake_state *device_handshake_setup(struct device *device,
+struct handshake_state *device_handshake_setup(struct device *device,
 						struct network *network,
 						struct scan_bss *bss)
 {
