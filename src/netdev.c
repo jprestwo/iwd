@@ -243,6 +243,12 @@ struct handshake_state *netdev_get_handshake(struct netdev *netdev)
 	return netdev->handshake;
 }
 
+void netdev_set_handshake(struct netdev *netdev,
+		struct handshake_state *hs)
+{
+	netdev->handshake = hs;
+}
+
 struct set_powered_cb_data {
 	struct netdev *netdev;
 	netdev_set_powered_cb_t callback;

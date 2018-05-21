@@ -106,6 +106,7 @@ bool netdev_get_4addr(struct netdev *netdev);
 const char *netdev_get_name(struct netdev *netdev);
 bool netdev_get_is_up(struct netdev *netdev);
 struct handshake_state *netdev_get_handshake(struct netdev *netdev);
+void netdev_set_handshake(struct netdev *netdev, struct handshake_state *hs);
 
 int netdev_connect(struct netdev *netdev, struct scan_bss *bss,
 				struct handshake_state *hs,
