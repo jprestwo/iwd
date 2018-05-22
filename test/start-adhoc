@@ -1,0 +1,22 @@
+#!/usr/bin/python3
+
+import sys
+import dbus
+import collections
+
+if len(sys.argv) < 3:
+    print("Usage: %s <device> <SSID> [<passphrase>]" % (sys.argv[0]))
+    sys.exit(1)
+
+ssid = sys.argv[2]
+# TODO: open networks
+passphrase = None
+
+if len(sys.argv) == 4:
+    passphrase = sys.argv[3]
+
+bus = dbus.SystemBus()
+device = dbus.Interface(bus.get_object("net.connman.iwd", sys.argv[1]),
+                                    "net.connman.iwd.Device")
+
+device.CreateAdHocNetwork(ssid, passphrase)
