@@ -397,3 +397,20 @@ class TestFailingCase(unittest.TestCase):
 if __name__ == '__main__':
 	unittest.main()
 #~~~~~~~~~~~~~~~~~~ end of alwaysFailingTest.py ~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Using iwmon in test-runner
+-------------------------------
+The --monitor flag can be used with test-runner to run iwmon during the test
+and save the output in a file. This should only be used when running a single
+test, otherwise each test will overwrite the previous tests monitor log. To
+use run test runner with --monitor <file>:
+
+sudo ./test-runner -A someTest --monitor mylog.txt
+
+Note: If the log file provided does not exist one will be created. This may
+seem convenient but since test-runner is always run as root, the output file
+will be owned by root as well. You can simply:
+
+echo "" > mylog.txt
+
+before running test-runner to create the file with user privileges.
