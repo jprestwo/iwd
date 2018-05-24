@@ -59,6 +59,7 @@
 #define BIN_OFONO			"ofonod"
 #define BIN_PHONESIM			"phonesim"
 #define BIN_HOSTAPD			"hostapd"
+#define BIN_WPA_SUPP			"wpa_supplicant"
 #define BIN_IWD				"iwd"
 
 #define HWSIM_RADIOS_MAX		100
@@ -154,9 +155,10 @@ struct wiphy {
 	unsigned int interface_index;
 	bool interface_created : 1;
 	bool used_by_hostapd : 1;
+	bool used_by_wpa_supp : 1;
 	char *interface_name;
-	char *hostapd_ctrl_interface;
-	char *hostapd_config;
+	char *ctrl_interface;
+	char *config_file;
 };
 
 static bool check_verbosity(const char *app)
@@ -731,6 +733,7 @@ static void terminate_medium(pid_t medium_pid)
 }
 
 #define HOSTAPD_CTRL_INTERFACE_PREFIX "/var/run/hostapd"
+#define WPA_SUPP_CTRL_INTERFACE_PREFIX "/var/run/wpa_supplicant"
 
 static bool loopback_started;
 
@@ -925,6 +928,65 @@ static void stop_monitor(pid_t pid)
 	kill_process(pid);
 }
 
+static int start_wpa_supps(char **config_files, struct wiphy **wiphys,
+		pid_t wpa_supp_pids_out[])
+{
+	uint32_t wait = 25 * 10000;
+	bool verbose = check_verbosity(BIN_WPA_SUPP);
+	int i;
+	int j = 0;
+
+	for (i = 0; config_files[i]; i++) {
+		char *argv[12];
+		int idx = 0;
+
+		for (; wiphys[j]; j++) {
+			if (wiphys[j]->used_by_wpa_supp)
+				break;
+		}
+
+		argv[idx++] = BIN_WPA_SUPP;
+		argv[idx++] = "-Dnl80211";
+		argv[idx++] = "-i";
+		argv[idx++] = wiphys[j]->interface_name;
+		argv[idx++] = "-c";
+		argv[idx++] = config_files[i];
+		argv[idx++] = "-u";
+
+		if (verbose)
+			argv[idx++] = "-ddK";
+
+		argv[idx] = NULL;
+
+		wpa_supp_pids_out[i] = execute_program(argv, false, verbose);
+		if (wpa_supp_pids_out[i] < 0) {
+			goto exit;
+		}
+
+		if (!wait_for_socket(wiphys[j]->ctrl_interface, wait))
+			wpa_supp_pids_out[i] = -1;
+	}
+
+exit:
+	return i;
+}
+
+static void destroy_wpa_supp_instances(pid_t wpa_supp_pids[])
+{
+	int i = 0;
+
+	while (wpa_supp_pids[i] != -1) {
+		kill_process(wpa_supp_pids[i]);
+
+		l_debug("wpa_supp instance with pid=%d is destroyed",
+			wpa_supp_pids[i]);
+
+		wpa_supp_pids[i] = -1;
+
+		i++;
+	}
+}
+
 static pid_t start_hostapd(char **config_files, struct wiphy **wiphys)
 {
 	char **argv;
@@ -954,7 +1016,7 @@ static pid_t start_hostapd(char **config_files, struct wiphy **wiphys)
 	argv[idx++] = ifnames;
 
 	argv[idx++] = "-g";
-	argv[idx++] = wiphys[0]->hostapd_ctrl_interface;
+	argv[idx++] = wiphys[0]->ctrl_interface;
 
 	for (i = 0, ifnames_size = 0; wiphys[i]; i++) {
 		if (ifnames_size)
@@ -977,7 +1039,7 @@ static pid_t start_hostapd(char **config_files, struct wiphy **wiphys)
 		goto exit;
 	}
 
-	if (!wait_for_socket(wiphys[0]->hostapd_ctrl_interface, wait))
+	if (!wait_for_socket(wiphys[0]->ctrl_interface, wait))
 		pid = -1;
 exit:
 	return pid;
@@ -1076,6 +1138,7 @@ static bool find_test_configuration(const char *path, int level,
 #define HW_CONFIG_FILE_NAME		"hw.conf"
 #define HW_CONFIG_GROUP_HOSTAPD		"HOSTAPD"
 #define HW_CONFIG_GROUP_SETUP		"SETUP"
+#define HW_CONFIG_GROUP_WPA_SUPP	"WPA_SUPP"
 
 #define HW_CONFIG_SETUP_NUM_RADIOS	"num_radios"
 #define HW_CONFIG_SETUP_RADIO_CONFS	"radio_confs"
@@ -1273,10 +1336,100 @@ static void wiphy_free(void *data)
 	destroy_hwsim_radio(wiphy->id);
 	l_debug("Removed radio id %d", wiphy->id);
 
-	l_free(wiphy->hostapd_config);
-	l_free(wiphy->hostapd_ctrl_interface);
+	l_free(wiphy->config_file);
+	l_free(wiphy->ctrl_interface);
 
 	l_free(wiphy);
+}
+
+static bool configure_wpa_supp_instances(struct l_settings *hw_settings,
+						char *config_dir_path,
+						struct l_queue *wiphy_list,
+						pid_t wpa_supp_pids_out[])
+{
+	char **wpa_supp_keys;
+	int i;
+	char **wpa_supp_config_file_paths;
+	struct wiphy **wiphys;
+
+	if (!l_settings_has_group(hw_settings, HW_CONFIG_GROUP_WPA_SUPP)) {
+		l_info("No wpa_supplicant instances to create");
+		return true;
+	}
+
+	wpa_supp_keys = l_settings_get_keys(hw_settings,
+			HW_CONFIG_GROUP_WPA_SUPP);
+
+	for (i = 0; wpa_supp_keys[i]; i++);
+
+	wpa_supp_config_file_paths = l_new(char *, i + 1);
+	wiphys = alloca(sizeof(struct wiphy *) * (i + 1));
+	wiphys[i] = NULL;
+
+	wpa_supp_pids_out[0] = -1;
+
+	for (i = 0; wpa_supp_keys[i]; i++) {
+		const struct l_queue_entry *wiphy_entry;
+		const char *wpa_supp_config_file;
+
+		wpa_supp_config_file =
+			l_settings_get_value(hw_settings,
+						HW_CONFIG_GROUP_WPA_SUPP,
+						wpa_supp_keys[i]);
+
+		wpa_supp_config_file_paths[i] =
+			l_strdup_printf("%s/%s", config_dir_path,
+					wpa_supp_config_file);
+
+		if (!path_exist(wpa_supp_config_file_paths[i])) {
+			l_error("%s : wpa_supplicant configuration file [%s] "
+				"does not exist.", HW_CONFIG_FILE_NAME,
+						wpa_supp_config_file_paths[i]);
+			goto done;
+		}
+
+		for (wiphy_entry = l_queue_get_entries(wiphy_list);
+					wiphy_entry;
+					wiphy_entry = wiphy_entry->next) {
+			struct wiphy *wiphy = wiphy_entry->data;
+
+			if (strcmp(wiphy->name, wpa_supp_keys[i]))
+				continue;
+
+			if (wiphy->used_by_hostapd || wiphy->used_by_wpa_supp) {
+				l_error("Wiphy %s already used by either"
+					" hostapd or wpa_supplicant",
+					wiphy->name);
+				goto done;
+			}
+
+			wiphys[i] = wiphy;
+			break;
+		}
+
+		if (!wiphy_entry) {
+			l_error("Failed to find available interface.");
+			goto done;
+		}
+
+		wiphys[i]->used_by_wpa_supp = true;
+		wiphys[i]->ctrl_interface =
+			l_strdup_printf("%s/%s", WPA_SUPP_CTRL_INTERFACE_PREFIX,
+					wiphys[0]->interface_name);
+		wiphys[i]->config_file = l_strdup(wpa_supp_config_file);
+	}
+
+	i = start_wpa_supps(wpa_supp_config_file_paths, wiphys,
+			wpa_supp_pids_out);
+	wpa_supp_pids_out[i] = -1;
+
+done:
+	l_strfreev(wpa_supp_config_file_paths);
+
+	if (wpa_supp_pids_out[0] < 1)
+		return false;
+
+	return true;
 }
 
 static bool configure_hostapd_instances(struct l_settings *hw_settings,
@@ -1349,10 +1502,10 @@ static bool configure_hostapd_instances(struct l_settings *hw_settings,
 		}
 
 		wiphys[i]->used_by_hostapd = true;
-		wiphys[i]->hostapd_ctrl_interface =
+		wiphys[i]->ctrl_interface =
 			l_strdup_printf("%s/%s", HOSTAPD_CTRL_INTERFACE_PREFIX,
 					wiphys[0]->interface_name);
-		wiphys[i]->hostapd_config = l_strdup(hostapd_config_file);
+		wiphys[i]->config_file = l_strdup(hostapd_config_file);
 	}
 
 	hostapd_pids_out[0] = start_hostapd(hostapd_config_file_paths, wiphys);
@@ -1406,7 +1559,7 @@ static pid_t start_iwd(const char *config_dir, struct l_queue *wiphy_list,
 			if (!wiphy->interface_created)
 				continue;
 
-			if (wiphy->used_by_hostapd)
+			if (wiphy->used_by_hostapd || wiphy->used_by_wpa_supp)
 				continue;
 
 			l_string_append_printf(list, "%s,", wiphy->name);
@@ -1787,8 +1940,8 @@ static void set_wiphy_list(struct l_queue *wiphy_list)
 		if (wiphy->interface_created)
 			size += 32 + strlen(wiphy->interface_name);
 		if (wiphy->used_by_hostapd) {
-			size += 32 + strlen(wiphy->hostapd_ctrl_interface) +
-				strlen(wiphy->hostapd_config);
+			size += 32 + strlen(wiphy->ctrl_interface) +
+				strlen(wiphy->config_file);
 		}
 	}
 
@@ -1808,8 +1961,13 @@ static void set_wiphy_list(struct l_queue *wiphy_list)
 		if (wiphy->used_by_hostapd)
 			size += sprintf(var + size,
 					"hostapd,ctrl_interface=%s,config=%s",
-					wiphy->hostapd_ctrl_interface,
-					wiphy->hostapd_config);
+					wiphy->ctrl_interface,
+					wiphy->config_file);
+		else if (wiphy->used_by_wpa_supp)
+			size += sprintf(var + size,
+					"wpa_supp,ctrl_interface=%s,config=%s",
+					wiphy->ctrl_interface,
+					wiphy->config_file);
 		else
 			size += sprintf(var + size, "iwd");
 	}
@@ -1823,6 +1981,7 @@ static void create_network_and_run_tests(const void *key, void *value,
 								void *data)
 {
 	pid_t hostapd_pids[HWSIM_RADIOS_MAX];
+	pid_t wpa_supp_pids[HWSIM_RADIOS_MAX];
 	pid_t iwd_pid = -1;
 	pid_t medium_pid = -1;
 	pid_t ofono_pid = -1;
@@ -1842,6 +2001,7 @@ static void create_network_and_run_tests(const void *key, void *value,
 	int use_monitor = strcmp(monitor_file, "none");
 
 	memset(hostapd_pids, -1, sizeof(hostapd_pids));
+	memset(wpa_supp_pids, -1, sizeof(wpa_supp_pids));
 
 	config_dir_path = (char *) key;
 	test_queue = (struct l_queue *) value;
@@ -1925,6 +2085,11 @@ static void create_network_and_run_tests(const void *key, void *value,
 						wiphy_list, hostapd_pids))
 		goto exit_hostapd;
 
+	if (!configure_wpa_supp_instances(hw_settings, config_dir_path,
+						wiphy_list, wpa_supp_pids))
+		goto exit_wpa_supp;
+
+
 	l_settings_get_bool(hw_settings, HW_CONFIG_GROUP_SETUP,
 				HW_CONFIG_SETUP_START_IWD, &start_iwd_daemon);
 
@@ -1973,6 +2138,9 @@ static void create_network_and_run_tests(const void *key, void *value,
 
 	if (use_monitor)
 		stop_monitor(monitor_pid);
+
+exit_wpa_supp:
+	destroy_wpa_supp_instances(wpa_supp_pids);
 
 exit_hostapd:
 	destroy_hostapd_instances(hostapd_pids);
