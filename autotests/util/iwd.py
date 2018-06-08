@@ -30,6 +30,7 @@ IWD_KNOWN_NETWORKS_INTERFACE =  'net.connman.iwd.KnownNetworks'
 IWD_NETWORK_INTERFACE =         'net.connman.iwd.Network'
 IWD_WSC_INTERFACE =             'net.connman.iwd.WiFiSimpleConfiguration'
 IWD_SIGNAL_AGENT_INTERFACE =    'net.connman.iwd.SignalLevelAgent'
+IWD_IBSS_INTERFACE =            'net.connman.iwd.AdHoc'
 
 IWD_AGENT_MANAGER_PATH =        '/'
 IWD_KNOWN_NETWORKS_PATH =       '/'
@@ -113,6 +114,7 @@ class IWDDBusAbstract(AsyncOpAbstract):
     _bus = dbus.SystemBus()
 
     def __init__(self, object_path = None, properties = None):
+        print("init, object path " + str(object_path))
         self._object_path = object_path
         proxy = self._bus.get_object(IWD_SERVICE, self._object_path)
         self._iface = dbus.Interface(proxy, self._iface_name)
@@ -120,6 +122,7 @@ class IWDDBusAbstract(AsyncOpAbstract):
 
         if properties is None:
             self._properties = self._prop_proxy.GetAll(self._iface_name)
+            print(str(self._properties))
         else:
             self._properties = properties
 
@@ -129,6 +132,11 @@ class IWDDBusAbstract(AsyncOpAbstract):
                                            path_keyword="path")
 
     def _property_changed_handler(self, interface, changed, invalidated, path):
+        print("Props changed on " + str(interface))
+        print(str(changed))
+        if interface == IWD_IBSS_INTERFACE:
+            print("IBSS CHANGED")
+            print(str(changed))
         if interface == self._iface_name and path == self._object_path:
             for name, value in changed.items():
                 self._properties[name] = value
@@ -366,12 +374,41 @@ class Device(IWDDBusAbstract):
                                     error_handler=self._failure)
         self._wait_for_async_op()
 
+    def _ibss_props_changed_cb(self, interface, changed, invalidated, path):
+        print("Props changed, " + str(interface))
+        if interface == IWD_IBSS_INTERFACE:
+            print(str(changed))
+
     def start_adhoc(self, ssid, psk):
-        self._iface.CreateAdHocNetwork(ssid, psk,
-                                       dbus_interface=self._iface_name,
-                                       reply_handler=self._success,
+        self._prop_proxy.connect_to_signal("PropertiesChanged",
+                                           self._ibss_props_changed_cb,
+                                           DBUS_PROPERTIES,
+                                           path_keyword="path")
+
+
+
+        print(self.device_path)
+        self.props_obj = self._bus.get_object(IWD_SERVICE, self.device_path)
+        self.props_obj.connect_to_signal("PropertiesChanged", self._ibss_props_changed_cb, dbus_interface=IWD_IBSS_INTERFACE, path_keyword="path")
+        self._props_iface = dbus.Interface(self._bus.get_object(IWD_SERVICE,
+                                            self.device_path),
+                                            DBUS_PROPERTIES)
+        self._props_iface.Set(IWD_DEVICE_INTERFACE, 'Mode', 'ad-hoc')
+        self._ibss_iface = dbus.Interface(self._bus.get_object(IWD_SERVICE,
+                                            self.device_path),
+                                            IWD_IBSS_INTERFACE)
+        self._props_iface.connect_to_signal("PropertiesChanged",
+                                           self._ibss_props_changed_cb,
+                                           dbus_interface=IWD_IBSS_INTERFACE,
+                                           path_keyword="path")
+        self._ibss_iface.Start(ssid, psk, reply_handler=self._success,
                                        error_handler=self._failure)
         self._wait_for_async_op()
+
+    def wait_for_peer(self, bssid):
+        peers = self._props_iface.Get(IWD_IBSS_INTERFACE, 'ConnectedPeers')
+
+        print(peers)
 
     def __str__(self, prefix = ''):
         return prefix + 'Device: ' + self.device_path + '\n'\
