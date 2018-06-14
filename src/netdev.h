@@ -27,6 +27,7 @@ struct scan_bss;
 struct handshake_state;
 struct eapol_sm;
 struct mmpdu_header;
+struct adhoc_parameters;
 
 enum netdev_result {
 	NETDEV_RESULT_OK,
@@ -48,6 +49,8 @@ enum netdev_event {
 	NETDEV_EVENT_RSSI_THRESHOLD_LOW,
 	NETDEV_EVENT_RSSI_THRESHOLD_HIGH,
 	NETDEV_EVENT_RSSI_LEVEL_NOTIFY,
+	NETDEV_EVENT_NEW_PEER,
+	NETDEV_EVENT_LOST_PEER
 };
 
 enum netdev_watch_event {
@@ -63,6 +66,9 @@ enum netdev_iftype {
 	NETDEV_IFTYPE_ADHOC
 };
 
+typedef void (*netdev_station_watch_func_t)(struct netdev *netdev,
+					const uint8_t *mac, bool state,
+					void *user_data);
 typedef void (*netdev_command_func_t) (bool result, void *user_data);
 typedef void (*netdev_connect_cb_t)(struct netdev *netdev,
 					enum netdev_result result,
@@ -130,6 +136,9 @@ int netdev_preauthenticate(struct netdev *netdev, struct scan_bss *target_bss,
 				netdev_preauthenticate_cb_t cb,
 				void *user_data);
 
+int netdev_join_adhoc(struct netdev *netdev, const char *ssid,
+		netdev_connect_cb_t cb, void *user_data);
+
 int netdev_set_powered(struct netdev *netdev, bool powered,
 				netdev_set_powered_cb_t cb, void *user_data,
 				netdev_destroy_func_t destroy);
@@ -155,6 +164,11 @@ struct netdev *netdev_find(int ifindex);
 uint32_t netdev_watch_add(struct netdev *netdev, netdev_watch_func_t func,
 				void *user_data);
 bool netdev_watch_remove(struct netdev *netdev, uint32_t id);
+
+uint32_t netdev_station_watch_add(struct netdev *netdev,
+		netdev_station_watch_func_t func, void *user_data);
+
+bool netdev_station_watch_remove(struct netdev *netdev, uint32_t id);
 
 bool netdev_init(struct l_genl_family *in,
 				const char *whitelist, const char *blacklist);

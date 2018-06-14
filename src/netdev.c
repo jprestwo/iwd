@@ -54,6 +54,7 @@
 #include "src/ftutil.h"
 #include "src/util.h"
 #include "src/watchlist.h"
+#include "src/adhoc.h"
 
 #ifndef ENOTSUPP
 #define ENOTSUPP 524
@@ -73,6 +74,7 @@ struct netdev {
 	netdev_connect_cb_t connect_cb;
 	netdev_disconnect_cb_t disconnect_cb;
 	netdev_neighbor_report_cb_t neighbor_report_cb;
+	netdev_connect_cb_t join_adhoc_cb;
 	void *user_data;
 	struct eapol_sm *sm;
 	struct handshake_state *handshake;
@@ -83,6 +85,7 @@ struct netdev {
 	uint32_t set_station_cmd_id;
 	uint32_t connect_cmd_id;
 	uint32_t disconnect_cmd_id;
+	uint32_t stop_join_adhoc_id;
 	enum netdev_result result;
 	struct l_timeout *neighbor_report_timeout;
 	struct l_timeout *sa_query_timeout;
@@ -98,6 +101,8 @@ struct netdev {
 	struct watchlist event_watches;
 
 	struct watchlist frame_watches;
+
+	struct watchlist station_watches;
 
 	struct l_io *pae_io;  /* for drivers without EAPoL over NL80211 */
 
@@ -224,8 +229,18 @@ uint32_t netdev_get_ifindex(struct netdev *netdev)
 
 enum netdev_iftype netdev_get_iftype(struct netdev *netdev)
 {
-	return netdev->type == NL80211_IFTYPE_AP ?
-		NETDEV_IFTYPE_AP : NETDEV_IFTYPE_STATION;
+	switch (netdev->type) {
+	case NL80211_IFTYPE_AP:
+		return NETDEV_IFTYPE_AP;
+	case NL80211_IFTYPE_STATION:
+		return NETDEV_IFTYPE_STATION;
+	case NL80211_IFTYPE_ADHOC:
+		return NETDEV_IFTYPE_ADHOC;
+	default:
+		l_error("invalid iftype %u", netdev->type);
+		/* cant really do anything here */
+		return NETDEV_IFTYPE_STATION;
+	}
 }
 
 const char *netdev_get_name(struct netdev *netdev)
@@ -566,6 +581,7 @@ static void netdev_free(void *data)
 	device_remove(netdev->device);
 	watchlist_destroy(&netdev->event_watches);
 	watchlist_destroy(&netdev->frame_watches);
+	watchlist_destroy(&netdev->station_watches);
 
 	l_io_destroy(netdev->pae_io);
 
@@ -2496,6 +2512,65 @@ int netdev_reassociate(struct netdev *netdev, struct scan_bss *target_bss,
 	return err;
 }
 
+static void netdev_adhoc_join_cb(struct l_genl_msg *msg, void *user_data)
+{
+	struct netdev *netdev = user_data;
+
+	netdev->stop_join_adhoc_id = 0;
+
+	if (l_genl_msg_get_error(msg) < 0) {
+		l_error("JOIN_IBSS failed: %i", l_genl_msg_get_error(msg));
+
+		netdev->join_adhoc_cb(netdev, NETDEV_RESULT_ABORTED,
+				netdev->user_data);
+	} else {
+		netdev->join_adhoc_cb(netdev, NETDEV_RESULT_OK,
+				netdev->user_data);
+	}
+}
+
+int netdev_join_adhoc(struct netdev *netdev, const char *ssid,
+		netdev_connect_cb_t cb, void *user_data)
+{
+	struct l_genl_msg *cmd;
+	uint32_t ifindex = device_get_ifindex(netdev->device);
+	uint32_t ch_freq = scan_channel_to_freq(6, SCAN_BAND_2_4_GHZ);
+	uint32_t ch_type = NL80211_CHAN_NO_HT;
+	uint8_t ie_elems[32];
+	struct ie_rsn_info rsn;
+
+	if (netdev->type != NL80211_IFTYPE_ADHOC) {
+		l_error("iftype is invalid for adhoc: %u\n",
+				netdev_get_iftype(netdev));
+		return -EINVAL;
+	}
+
+	netdev->join_adhoc_cb = cb;
+	netdev->user_data = user_data;
+
+	memset(&rsn, 0, sizeof(rsn));
+	rsn.akm_suites = IE_RSN_AKM_SUITE_PSK;
+	rsn.pairwise_ciphers = wiphy_select_cipher(netdev->wiphy, 0xffff);
+	rsn.group_cipher = IE_RSN_CIPHER_SUITE_NO_GROUP_TRAFFIC;
+	ie_build_rsne(&rsn, ie_elems);
+
+	cmd = l_genl_msg_new_sized(NL80211_CMD_JOIN_IBSS, 128);
+
+	l_genl_msg_append_attr(cmd, NL80211_ATTR_IFINDEX, 4, &ifindex);
+	l_genl_msg_append_attr(cmd, NL80211_ATTR_SSID, strlen(ssid), ssid);
+	l_genl_msg_append_attr(cmd, NL80211_ATTR_WIPHY_FREQ, 4, &ch_freq);
+	l_genl_msg_append_attr(cmd, NL80211_ATTR_WIPHY_CHANNEL_TYPE, 4,
+			&ch_type);
+	l_genl_msg_append_attr(cmd, NL80211_ATTR_CONTROL_PORT, 0, NULL);
+	l_genl_msg_append_attr(cmd, NL80211_ATTR_PRIVACY, 0, NULL);
+	l_genl_msg_append_attr(cmd, NL80211_ATTR_IE, 2 + ie_elems[1], ie_elems);
+
+	netdev->stop_join_adhoc_id = l_genl_family_send(nl80211, cmd,
+			netdev_adhoc_join_cb, netdev, NULL);
+
+	return 0;
+}
+
 /*
  * Build an FT Authentication Request frame according to 12.5.2 / 12.5.4:
  * RSN or non-RSN Over-the-air FT Protocol, with the IE contents
@@ -3037,6 +3112,39 @@ static void netdev_unprot_disconnect_event(struct l_genl_msg *msg,
 			netdev_sa_query_timeout, netdev, NULL);
 }
 
+static void netdev_station_event(struct l_genl_msg *msg,
+		struct netdev *netdev, bool added)
+{
+	struct l_genl_attr attr;
+	uint16_t type;
+	uint16_t len;
+	const void *data;
+	const uint8_t *mac = NULL;
+
+	//if (netdev_get_iftype(netdev) != NETDEV_IFTYPE_ADHOC)
+	//	return;
+
+	if (!l_genl_attr_init(&attr, msg))
+		return;
+
+	while (l_genl_attr_next(&attr, &type, &len, &data)) {
+		switch (type) {
+		case NL80211_ATTR_MAC:
+			mac = data;
+			break;
+		}
+	}
+
+	if (!mac) {
+		l_error("%s station event did not include MAC attribute",
+				added ? "new" : "del");
+		return;
+	}
+
+	WATCHLIST_NOTIFY(&netdev->station_watches,
+			netdev_station_watch_func_t, netdev, mac, added);
+}
+
 static void netdev_mlme_notify(struct l_genl_msg *msg, void *user_data)
 {
 	struct netdev *netdev = NULL;
@@ -3095,6 +3203,12 @@ static void netdev_mlme_notify(struct l_genl_msg *msg, void *user_data)
 	case NL80211_CMD_UNPROT_DEAUTHENTICATE:
 	case NL80211_CMD_UNPROT_DISASSOCIATE:
 		netdev_unprot_disconnect_event(msg, netdev);
+		break;
+	case NL80211_CMD_NEW_STATION:
+		netdev_station_event(msg, netdev, true);
+		break;
+	case NL80211_CMD_DEL_STATION:
+		netdev_station_event(msg, netdev, false);
 		break;
 	}
 }
@@ -4080,6 +4194,7 @@ static void netdev_create_from_genl(struct l_genl_msg *msg)
 
 	watchlist_init(&netdev->event_watches, NULL);
 	watchlist_init(&netdev->frame_watches, &netdev_frame_watch_ops);
+	watchlist_init(&netdev->station_watches, NULL);
 
 	l_queue_push_tail(netdev_list, netdev);
 
@@ -4207,6 +4322,17 @@ uint32_t netdev_watch_add(struct netdev *netdev, netdev_watch_func_t func,
 bool netdev_watch_remove(struct netdev *netdev, uint32_t id)
 {
 	return watchlist_remove(&netdev->event_watches, id);
+}
+
+uint32_t netdev_station_watch_add(struct netdev *netdev,
+		netdev_station_watch_func_t func, void *user_data)
+{
+	return watchlist_add(&netdev->station_watches, func, user_data, NULL);
+}
+
+bool netdev_station_watch_remove(struct netdev *netdev, uint32_t id)
+{
+	return watchlist_remove(&netdev->station_watches, id);
 }
 
 bool netdev_init(struct l_genl_family *in,
