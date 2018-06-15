@@ -925,6 +925,11 @@ static void netdev_setting_keys_failed(struct netdev *netdev,
 	netdev->set_station_cmd_id = 0;
 
 	netdev->result = NETDEV_RESULT_KEY_SETTING_FAILED;
+
+	/* disconnect is only relevant in station mode */
+	if (netdev->type != NL80211_IFTYPE_STATION)
+		return;
+
 	msg = netdev_build_cmd_disconnect(netdev,
 						MMPDU_REASON_CODE_UNSPECIFIED);
 	netdev->disconnect_cmd_id = l_genl_family_send(nl80211, msg,
@@ -938,6 +943,10 @@ static void netdev_set_station_cb(struct l_genl_msg *msg, void *user_data)
 	int err;
 
 	netdev->set_station_cmd_id = 0;
+
+	/* callback is only relevant in station mode */
+	if (netdev->type != NL80211_IFTYPE_STATION)
+		return;
 
 	if (!netdev->connected)
 		return;
@@ -1298,6 +1307,11 @@ static void netdev_handshake_failed(uint32_t ifindex,
 	netdev->sm = NULL;
 
 	netdev->result = NETDEV_RESULT_HANDSHAKE_FAILED;
+
+	/* disconnect is only relevant in station mode */
+	if (netdev->type != NL80211_IFTYPE_STATION)
+		return;
+
 	msg = netdev_build_cmd_disconnect(netdev, reason_code);
 	netdev->disconnect_cmd_id = l_genl_family_send(nl80211, msg,
 						netdev_connect_failed,
