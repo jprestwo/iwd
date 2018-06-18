@@ -47,6 +47,11 @@ enum eapol_key_descriptor_version {
 	EAPOL_KEY_DESCRIPTOR_VERSION_AES_128_CMAC_AES	= 3,
 };
 
+enum eapol_event {
+	EAPOL_EVENT_HANDSHAKE_FAILED,
+	EAPOL_EVENT_HANDSHAKE_SUCCESS
+};
+
 struct eapol_sm;
 struct handshake_state;
 struct preauth_sm;
@@ -183,7 +188,6 @@ void __eapol_tx_packet(uint32_t ifindex, const uint8_t *dst, uint16_t proto,
 void __eapol_set_tx_packet_func(eapol_tx_packet_func_t func);
 void __eapol_set_tx_user_data(void *user_data);
 
-void __eapol_set_deauthenticate_func(eapol_deauthenticate_func_t func);
 void __eapol_set_rekey_offload_func(eapol_rekey_offload_func_t func);
 void __eapol_update_replay_counter(uint32_t ifindex, const uint8_t *spa,
 				const uint8_t *aa, uint64_t replay_counter);
