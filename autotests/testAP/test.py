@@ -91,8 +91,22 @@ class Test(unittest.TestCase):
         wd.wait_for_object_condition(networks['TestAP2'].network_object,
                                      condition)
 
-        testutil.test_iface_operstate(dev2.name)
-        testutil.test_ifaces_connected(dev1.name, dev2.name)
+        # TODO: This is here to work around a race condition where the station
+        #       shows connected but the AP has not yet finished adding the new
+        #       station yet. This will be fixed once a proper AP interface is
+        #       implemented that has some way of notifying when a station has
+        #       been added e.g. "ConnectedPeers" property or "PeerAdded" signal.
+
+        retries = 0
+
+        while retries < 3:
+            try:
+                testutil.test_iface_operstate(dev2.name)
+                testutil.test_ifaces_connected(dev1.name, dev2.name)
+                break
+            except:
+                retries += 1
+                continue
 
         wd.unregister_psk_agent(psk_agent)
 
