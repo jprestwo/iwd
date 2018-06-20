@@ -107,6 +107,9 @@ struct netdev {
 	bool in_ft : 1;
 	bool cur_rssi_low : 1;
 	bool use_4addr : 1;
+
+	void *wsc_user_data;
+	eapol_sm_event_func_t wsc_eapol_cb;
 };
 
 struct netdev_preauth_state {
@@ -1173,20 +1176,8 @@ static void netdev_set_pairwise_key_cb(struct l_genl_msg *msg, void *data)
 		goto error;
 	}
 
-	/*
-	 * Set the AUTHORIZED flag using a SET_STATION command even if
-	 * we're already operational, it will not hurt during re-keying
-	 * and is necessary after an FT.
-	 */
-	msg = netdev_build_cmd_set_station(netdev, netdev->handshake->aa);
+	return;
 
-	netdev->set_station_cmd_id =
-		l_genl_family_send(nl80211, msg, netdev_set_station_cb,
-					netdev, NULL);
-	if (netdev->set_station_cmd_id > 0)
-		return;
-
-	l_genl_msg_unref(msg);
 error:
 	netdev_setting_keys_failed(netdev, MMPDU_REASON_CODE_UNSPECIFIED);
 }
@@ -2213,6 +2204,74 @@ static struct l_genl_msg *netdev_build_cmd_connect(struct netdev *netdev,
 	return msg;
 }
 
+int netdev_authorize_station(struct netdev *netdev, const uint8_t *sta)
+{
+	struct l_genl_msg *msg;
+
+	/*
+	* Set the AUTHORIZED flag using a SET_STATION command even if
+	* we're already operational, it will not hurt during re-keying
+	* and is necessary after an FT.
+	*/
+	msg = netdev_build_cmd_set_station(netdev, sta);
+
+	netdev->set_station_cmd_id =
+		l_genl_family_send(nl80211, msg, netdev_set_station_cb,
+					netdev, NULL);
+	if (netdev->set_station_cmd_id > 0)
+		return 0;
+
+	l_genl_msg_unref(msg);
+
+	return -EIO;
+}
+
+static void netdev_del_sta_cb(struct l_genl_msg *msg, void *user_data)
+{
+	if (l_genl_msg_get_error(msg) < 0)
+		l_error("DEL_STATION failed: %i", l_genl_msg_get_error(msg));
+}
+
+int netdev_remove_station(struct netdev *netdev, const uint8_t *sta)
+{
+	struct l_genl_msg *msg;
+
+	msg = l_genl_msg_new_sized(NL80211_CMD_DEL_STATION, 64);
+	l_genl_msg_append_attr(msg, NL80211_ATTR_IFINDEX, 4, &netdev->index);
+	l_genl_msg_append_attr(msg, NL80211_ATTR_MAC, 6, sta);
+
+	if (!l_genl_family_send(nl80211, msg, netdev_del_sta_cb, NULL, NULL)) {
+		l_genl_msg_unref(msg);
+		l_error("Issuing DEL_STATION failed");
+		return -EIO;
+	}
+
+	return 0;
+}
+
+static void netdev_eapol_event_cb(unsigned int event,
+		const void *event_data, void *user_data)
+{
+	struct netdev *netdev = user_data;
+
+	switch (event) {
+	case EAPOL_EVENT_HANDSHAKE_FAILED:
+		netdev_handshake_failed(netdev->index, netdev->handshake->aa,
+				netdev->handshake->spa,
+				l_get_u16(event_data), netdev);
+		handshake_state_free(netdev->handshake);
+		netdev->handshake = NULL;
+		break;
+	case EAPOL_EVENT_HANDSHAKE_SUCCESS:
+		netdev_authorize_station(netdev, netdev->handshake->aa);
+		break;
+	}
+
+	if (netdev->wsc_eapol_cb)
+		netdev->wsc_eapol_cb(event, event_data, netdev->wsc_user_data);
+
+}
+
 static int netdev_connect_common(struct netdev *netdev,
 					struct l_genl_msg *cmd_connect,
 					struct scan_bss *bss,
@@ -2243,6 +2302,9 @@ static int netdev_connect_common(struct netdev *netdev,
 
 	handshake_state_set_authenticator_address(hs, bss->addr);
 	handshake_state_set_supplicant_address(hs, netdev->addr);
+
+	eapol_sm_set_user_data(sm, netdev);
+	eapol_sm_set_event_func(sm, netdev_eapol_event_cb);
 
 	return 0;
 }
@@ -2309,8 +2371,9 @@ int netdev_connect_wsc(struct netdev *netdev, struct scan_bss *bss,
 	l_free(ie);
 
 	sm = eapol_sm_new(hs);
-	eapol_sm_set_user_data(sm, user_data);
-	eapol_sm_set_event_func(sm, eapol_cb);
+
+	netdev->wsc_user_data = user_data;
+	netdev->wsc_eapol_cb = eapol_cb;
 
 	return netdev_connect_common(netdev, cmd_connect, bss, hs, sm,
 						event_filter, cb, user_data);
