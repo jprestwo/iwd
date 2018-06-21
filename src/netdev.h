@@ -153,6 +153,9 @@ int netdev_get_rssi_level(struct netdev *netdev);
 int netdev_authorize_station(struct handshake_state *hs,
 		const uint8_t *sta);
 int netdev_remove_station(struct netdev *netdev, const uint8_t *sta);
+
+struct handshake_state *netdev_new_handshake(struct netdev *netdev);
+
 uint32_t netdev_frame_watch_add(struct netdev *netdev, uint16_t frame_type,
 				const uint8_t *prefix, size_t prefix_len,
 				netdev_frame_watch_func_t handler,

@@ -60,6 +60,16 @@
 #define ENOTSUPP 524
 #endif
 
+struct netdev_handshake_state {
+	struct handshake_state handshake;
+	uint32_t pairwise_new_key_cmd_id;
+	uint32_t pairwise_set_key_cmd_id;
+	uint32_t group_new_key_cmd_id;
+	uint32_t group_management_new_key_cmd_id;
+	uint32_t set_station_cmd_id;
+	struct netdev *netdev;
+};
+
 struct netdev {
 	uint32_t index;
 	char name[IFNAMSIZ];
@@ -141,6 +151,19 @@ static struct l_genl_family *nl80211;
 static struct l_queue *netdev_list;
 static char **whitelist_filter;
 static char **blacklist_filter;
+
+struct handshake_state *netdev_new_handshake(struct netdev *netdev)
+{
+	struct netdev_handshake_state *s = l_new(
+			struct netdev_handshake_state, 1);
+	
+	memset(&s->handshake, 0, sizeof(struct handshake_state));
+
+	s->handshake.ifindex = netdev->index;
+	s->netdev = netdev;
+
+	return &s->handshake;
+}
 
 static void do_debug(const char *str, void *user_data)
 {
@@ -919,7 +942,7 @@ static void netdev_connect_ok(struct netdev *netdev)
 	netdev_rssi_polling_update(netdev);
 }
 
-static void netdev_setting_keys_failed(struct netdev *netdev,
+static void netdev_setting_keys_failed(struct netdev_handshake_state *nhs,
 							uint16_t reason_code)
 {
 	struct l_genl_msg *msg;
@@ -930,47 +953,47 @@ static void netdev_setting_keys_failed(struct netdev *netdev,
 	 *
 	 * Cancel all pending commands, then de-authenticate
 	 */
-	l_genl_family_cancel(nl80211, netdev->pairwise_new_key_cmd_id);
-	netdev->pairwise_new_key_cmd_id = 0;
+	l_genl_family_cancel(nl80211, nhs->pairwise_new_key_cmd_id);
+	nhs->pairwise_new_key_cmd_id = 0;
 
-	l_genl_family_cancel(nl80211, netdev->pairwise_set_key_cmd_id);
-	netdev->pairwise_set_key_cmd_id = 0;
+	l_genl_family_cancel(nl80211, nhs->pairwise_set_key_cmd_id);
+	nhs->pairwise_set_key_cmd_id = 0;
 
-	l_genl_family_cancel(nl80211, netdev->group_new_key_cmd_id);
-	netdev->group_new_key_cmd_id = 0;
+	l_genl_family_cancel(nl80211, nhs->group_new_key_cmd_id);
+	nhs->group_new_key_cmd_id = 0;
 
 	l_genl_family_cancel(nl80211,
-		netdev->group_management_new_key_cmd_id);
-	netdev->group_management_new_key_cmd_id = 0;
+		nhs->group_management_new_key_cmd_id);
+	nhs->group_management_new_key_cmd_id = 0;
 
-	l_genl_family_cancel(nl80211, netdev->set_station_cmd_id);
-	netdev->set_station_cmd_id = 0;
+	l_genl_family_cancel(nl80211, nhs->set_station_cmd_id);
+	nhs->set_station_cmd_id = 0;
 
-	netdev->result = NETDEV_RESULT_KEY_SETTING_FAILED;
+	nhs->netdev->result = NETDEV_RESULT_KEY_SETTING_FAILED;
 
 	/* disconnect is only relevant in station mode */
-	if (netdev->type != NL80211_IFTYPE_STATION)
+	if (nhs->netdev->type != NL80211_IFTYPE_STATION)
 		return;
 
-	msg = netdev_build_cmd_disconnect(netdev,
+	msg = netdev_build_cmd_disconnect(nhs->netdev,
 						MMPDU_REASON_CODE_UNSPECIFIED);
-	netdev->disconnect_cmd_id = l_genl_family_send(nl80211, msg,
+	nhs->netdev->disconnect_cmd_id = l_genl_family_send(nl80211, msg,
 							netdev_connect_failed,
-							netdev, NULL);
+							nhs->netdev, NULL);
 }
 
 static void netdev_set_station_cb(struct l_genl_msg *msg, void *user_data)
 {
-	struct netdev *netdev = user_data;
+	struct netdev_handshake_state *nhs = user_data;
 	int err;
 
-	netdev->set_station_cmd_id = 0;
+	nhs->set_station_cmd_id = 0;
 
 	/* callback is only relevant in station mode */
-	if (netdev->type != NL80211_IFTYPE_STATION)
+	if (nhs->netdev->type != NL80211_IFTYPE_STATION)
 		return;
 
-	if (!netdev->connected)
+	if (!nhs->netdev->connected)
 		return;
 
 	err = l_genl_msg_get_error(msg);
@@ -978,14 +1001,15 @@ static void netdev_set_station_cb(struct l_genl_msg *msg, void *user_data)
 		goto done;
 
 	if (err < 0) {
-		l_error("Set Station failed for ifindex %d", netdev->index);
-		netdev_setting_keys_failed(netdev,
+		l_error("Set Station failed for ifindex %d",
+				nhs->netdev->index);
+		netdev_setting_keys_failed(nhs,
 						MMPDU_REASON_CODE_UNSPECIFIED);
 		return;
 	}
 
 done:
-	netdev_connect_ok(netdev);
+	netdev_connect_ok(nhs->netdev);
 }
 
 static struct l_genl_msg *netdev_build_cmd_set_station(struct netdev *netdev,
@@ -1009,29 +1033,29 @@ static struct l_genl_msg *netdev_build_cmd_set_station(struct netdev *netdev,
 
 static void netdev_new_group_key_cb(struct l_genl_msg *msg, void *data)
 {
-	struct netdev *netdev = data;
+	struct netdev_handshake_state *nhs = data;
 
-	netdev->group_new_key_cmd_id = 0;
+	nhs->group_new_key_cmd_id = 0;
 
 	if (l_genl_msg_get_error(msg) >= 0)
 		return;
 
-	l_error("New Key for Group Key failed for ifindex: %d", netdev->index);
-	netdev_setting_keys_failed(netdev, MMPDU_REASON_CODE_UNSPECIFIED);
+	l_error("New Key for Group Key failed for ifindex: %d",
+			nhs->netdev->index);
+	netdev_setting_keys_failed(nhs, MMPDU_REASON_CODE_UNSPECIFIED);
 }
 
 static void netdev_new_group_management_key_cb(struct l_genl_msg *msg,
 					void *data)
 {
-	struct netdev *netdev = data;
+	struct netdev_handshake_state *nhs = data;
 
-	netdev->group_management_new_key_cmd_id = 0;
+	nhs->group_management_new_key_cmd_id = 0;
 
 	if (l_genl_msg_get_error(msg) < 0) {
 		l_error("New Key for Group Mgmt failed for ifindex: %d",
-				netdev->index);
-		netdev_setting_keys_failed(netdev,
-						MMPDU_REASON_CODE_UNSPECIFIED);
+				nhs->netdev->index);
+		netdev_setting_keys_failed(nhs, MMPDU_REASON_CODE_UNSPECIFIED);
 	}
 }
 
@@ -1109,7 +1133,7 @@ static bool netdev_copy_tk(uint8_t *tk_buf, const uint8_t *tk,
 	return true;
 }
 
-static void netdev_set_gtk(uint32_t ifindex, uint8_t key_index,
+static void netdev_set_gtk(struct handshake_state *hs, uint8_t key_index,
 				const uint8_t *gtk, uint8_t gtk_len,
 				const uint8_t *rsc, uint8_t rsc_len,
 				uint32_t cipher, void *user_data)
@@ -1117,20 +1141,22 @@ static void netdev_set_gtk(uint32_t ifindex, uint8_t key_index,
 	uint8_t gtk_buf[32];
 	struct netdev *netdev;
 	struct l_genl_msg *msg;
+	struct netdev_handshake_state *nhs = container_of(hs,
+			struct netdev_handshake_state, handshake);
 
-	netdev = netdev_find(ifindex);
+	netdev = nhs->netdev;
 
 	l_debug("%d", netdev->index);
 
 	if (crypto_cipher_key_len(cipher) != gtk_len) {
 		l_error("Unexpected key length: %d", gtk_len);
-		netdev_setting_keys_failed(netdev,
+		netdev_setting_keys_failed(nhs,
 					MMPDU_REASON_CODE_INVALID_GROUP_CIPHER);
 		return;
 	}
 
 	if (!netdev_copy_tk(gtk_buf, gtk, cipher, false)) {
-		netdev_setting_keys_failed(netdev,
+		netdev_setting_keys_failed(nhs,
 					MMPDU_REASON_CODE_INVALID_GROUP_CIPHER);
 		return;
 	}
@@ -1138,18 +1164,18 @@ static void netdev_set_gtk(uint32_t ifindex, uint8_t key_index,
 	msg = netdev_build_cmd_new_key_group(netdev, cipher, key_index,
 						gtk_buf, gtk_len,
 						rsc, rsc_len);
-	netdev->group_new_key_cmd_id =
+	nhs->group_new_key_cmd_id =
 		l_genl_family_send(nl80211, msg, netdev_new_group_key_cb,
-						netdev, NULL);
+						nhs, NULL);
 
-	if (netdev->group_new_key_cmd_id > 0)
+	if (nhs->group_new_key_cmd_id > 0)
 		return;
 
 	l_genl_msg_unref(msg);
-	netdev_setting_keys_failed(netdev, MMPDU_REASON_CODE_UNSPECIFIED);
+	netdev_setting_keys_failed(nhs, MMPDU_REASON_CODE_UNSPECIFIED);
 }
 
-static void netdev_set_igtk(uint32_t ifindex, uint8_t key_index,
+static void netdev_set_igtk(struct handshake_state *hs, uint8_t key_index,
 				const uint8_t *igtk, uint8_t igtk_len,
 				const uint8_t *ipn, uint8_t ipn_len,
 				uint32_t cipher, void *user_data)
@@ -1157,14 +1183,16 @@ static void netdev_set_igtk(uint32_t ifindex, uint8_t key_index,
 	uint8_t igtk_buf[16];
 	struct netdev *netdev;
 	struct l_genl_msg *msg;
+	struct netdev_handshake_state *nhs = container_of(hs,
+			struct netdev_handshake_state, handshake);
 
-	netdev = netdev_find(ifindex);
+	netdev = nhs->netdev;
 
 	l_debug("%d", netdev->index);
 
 	if (crypto_cipher_key_len(cipher) != igtk_len) {
 		l_error("Unexpected key length: %d", igtk_len);
-		netdev_setting_keys_failed(netdev,
+		netdev_setting_keys_failed(nhs,
 					MMPDU_REASON_CODE_INVALID_GROUP_CIPHER);
 		return;
 	}
@@ -1175,7 +1203,7 @@ static void netdev_set_igtk(uint32_t ifindex, uint8_t key_index,
 		break;
 	default:
 		l_error("Unexpected cipher: %x", cipher);
-		netdev_setting_keys_failed(netdev,
+		netdev_setting_keys_failed(nhs,
 					MMPDU_REASON_CODE_INVALID_GROUP_CIPHER);
 		return;
 	}
@@ -1183,34 +1211,34 @@ static void netdev_set_igtk(uint32_t ifindex, uint8_t key_index,
 	msg = netdev_build_cmd_new_key_group(netdev, cipher, key_index,
 						igtk_buf, igtk_len,
 						ipn, ipn_len);
-	netdev->group_management_new_key_cmd_id =
+	nhs->group_management_new_key_cmd_id =
 			l_genl_family_send(nl80211, msg,
 				netdev_new_group_management_key_cb,
-				netdev, NULL);
+				nhs, NULL);
 
-	if (netdev->group_management_new_key_cmd_id > 0)
+	if (nhs->group_management_new_key_cmd_id > 0)
 		return;
 
 	l_genl_msg_unref(msg);
-	netdev_setting_keys_failed(netdev, MMPDU_REASON_CODE_UNSPECIFIED);
+	netdev_setting_keys_failed(nhs, MMPDU_REASON_CODE_UNSPECIFIED);
 }
 
 static void netdev_set_pairwise_key_cb(struct l_genl_msg *msg, void *data)
 {
-	struct netdev *netdev = data;
+	struct netdev_handshake_state *nhs = data;
 
-	netdev->pairwise_set_key_cmd_id = 0;
+	nhs->pairwise_set_key_cmd_id = 0;
 
 	if (l_genl_msg_get_error(msg) < 0) {
 		l_error("Set Key for Pairwise Key failed for ifindex: %d",
-				netdev->index);
+				nhs->netdev->index);
 		goto error;
 	}
 
 	return;
 
 error:
-	netdev_setting_keys_failed(netdev, MMPDU_REASON_CODE_UNSPECIFIED);
+	netdev_setting_keys_failed(nhs, MMPDU_REASON_CODE_UNSPECIFIED);
 }
 
 static struct l_genl_msg *netdev_build_cmd_set_key_pairwise(
@@ -1235,16 +1263,16 @@ static struct l_genl_msg *netdev_build_cmd_set_key_pairwise(
 
 static void netdev_new_pairwise_key_cb(struct l_genl_msg *msg, void *data)
 {
-	struct netdev *netdev = data;
+	struct netdev_handshake_state *nhs = data;
 
-	netdev->pairwise_new_key_cmd_id = 0;
+	nhs->pairwise_new_key_cmd_id = 0;
 
 	if (l_genl_msg_get_error(msg) >= 0)
 		return;
 
 	l_error("New Key for Pairwise Key failed for ifindex: %d",
-								netdev->index);
-	netdev_setting_keys_failed(netdev, MMPDU_REASON_CODE_UNSPECIFIED);
+							nhs->netdev->index);
+	netdev_setting_keys_failed(nhs, MMPDU_REASON_CODE_UNSPECIFIED);
 }
 
 static struct l_genl_msg *netdev_build_cmd_new_key_pairwise(
@@ -1268,7 +1296,8 @@ static struct l_genl_msg *netdev_build_cmd_new_key_pairwise(
 	return msg;
 }
 
-static void netdev_set_tk(uint32_t ifindex, const uint8_t *aa,
+
+static void netdev_set_tk(struct handshake_state *hs, const uint8_t *aa,
 				const uint8_t *tk, uint32_t cipher,
 				void *user_data)
 {
@@ -1276,8 +1305,10 @@ static void netdev_set_tk(uint32_t ifindex, const uint8_t *aa,
 	struct netdev *netdev;
 	struct l_genl_msg *msg;
 	enum mmpdu_reason_code rc;
+	struct netdev_handshake_state *nhs = container_of(hs,
+			struct netdev_handshake_state, handshake);
 
-	netdev = netdev_find(ifindex);
+	netdev = nhs->netdev;
 	if (!netdev)
 		return;
 
@@ -1292,24 +1323,26 @@ static void netdev_set_tk(uint32_t ifindex, const uint8_t *aa,
 		goto invalid_key;
 
 	rc = MMPDU_REASON_CODE_UNSPECIFIED;
+
 	msg = netdev_build_cmd_new_key_pairwise(netdev, cipher, aa, tk_buf,
+
 						crypto_cipher_key_len(cipher));
-	netdev->pairwise_new_key_cmd_id = l_genl_family_send(nl80211, msg,
-			netdev_new_pairwise_key_cb, netdev, NULL);
-	if (!netdev->pairwise_new_key_cmd_id)
+	nhs->pairwise_new_key_cmd_id = l_genl_family_send(nl80211, msg,
+			netdev_new_pairwise_key_cb, nhs, NULL);
+	if (!nhs->pairwise_new_key_cmd_id)
 		goto send_failed;
 
 	msg = netdev_build_cmd_set_key_pairwise(netdev);
-	netdev->pairwise_set_key_cmd_id =
+	nhs->pairwise_set_key_cmd_id =
 		l_genl_family_send(nl80211, msg, netdev_set_pairwise_key_cb,
-						netdev, NULL);
-	if (netdev->pairwise_set_key_cmd_id > 0)
+						nhs, NULL);
+	if (nhs->pairwise_set_key_cmd_id > 0)
 		return;
 
 send_failed:
 	l_genl_msg_unref(msg);
 invalid_key:
-	netdev_setting_keys_failed(netdev, rc);
+	netdev_setting_keys_failed(nhs, rc);
 }
 
 static void netdev_handshake_failed(uint32_t ifindex,
@@ -2240,21 +2273,24 @@ static struct l_genl_msg *netdev_build_cmd_connect(struct netdev *netdev,
 	return msg;
 }
 
-int netdev_authorize_station(struct netdev *netdev, const uint8_t *sta)
+int netdev_authorize_station(struct handshake_state *hs,
+		const uint8_t *sta)
 {
 	struct l_genl_msg *msg;
+	struct netdev_handshake_state *nhs = container_of(hs,
+			struct netdev_handshake_state, handshake);
 
 	/*
 	* Set the AUTHORIZED flag using a SET_STATION command even if
 	* we're already operational, it will not hurt during re-keying
 	* and is necessary after an FT.
 	*/
-	msg = netdev_build_cmd_set_station(netdev, sta);
+	msg = netdev_build_cmd_set_station(nhs->netdev, sta);
 
-	netdev->set_station_cmd_id =
+	nhs->set_station_cmd_id =
 		l_genl_family_send(nl80211, msg, netdev_set_station_cb,
-					netdev, NULL);
-	if (netdev->set_station_cmd_id > 0)
+					nhs, NULL);
+	if (nhs->set_station_cmd_id > 0)
 		return 0;
 
 	l_genl_msg_unref(msg);
@@ -2288,7 +2324,10 @@ int netdev_remove_station(struct netdev *netdev, const uint8_t *sta)
 static void netdev_eapol_event_cb(unsigned int event,
 		const void *event_data, void *user_data)
 {
-	struct netdev *netdev = user_data;
+	struct handshake_state *hs = user_data;
+	struct netdev_handshake_state *nhs = container_of(hs,
+			struct netdev_handshake_state, handshake);
+	struct netdev *netdev = nhs->netdev;
 
 	switch (event) {
 	case EAPOL_EVENT_HANDSHAKE_FAILED:
@@ -2299,7 +2338,7 @@ static void netdev_eapol_event_cb(unsigned int event,
 		netdev->handshake = NULL;
 		break;
 	case EAPOL_EVENT_HANDSHAKE_SUCCESS:
-		netdev_authorize_station(netdev, netdev->handshake->aa);
+		netdev_authorize_station(hs, netdev->handshake->aa);
 		break;
 	}
 
@@ -2339,7 +2378,7 @@ static int netdev_connect_common(struct netdev *netdev,
 	handshake_state_set_authenticator_address(hs, bss->addr);
 	handshake_state_set_supplicant_address(hs, netdev->addr);
 
-	eapol_sm_set_user_data(sm, netdev);
+	eapol_sm_set_user_data(sm, hs);
 	eapol_sm_set_event_func(sm, netdev_eapol_event_cb);
 
 	return 0;
