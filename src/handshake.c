@@ -251,6 +251,11 @@ void handshake_state_set_anonce(struct handshake_state *s,
 	memcpy(s->anonce, anonce, 32);
 }
 
+void handshake_state_set_authenticator(struct handshake_state *s, bool auth)
+{
+	s->authenticator = auth;
+}
+
 bool handshake_state_derive_ptk(struct handshake_state *s)
 {
 	struct crypto_ptk *ptk = (struct crypto_ptk *) s->ptk;

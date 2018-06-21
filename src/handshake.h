@@ -67,6 +67,7 @@ struct handshake_state {
 	bool have_pmk : 1;
 	bool mfp : 1;
 	bool have_anonce : 1;
+	bool authenticator : 1;
 	uint8_t ssid[32];
 	size_t ssid_len;
 	uint8_t r0khid[48];
@@ -130,6 +131,8 @@ void handshake_state_new_snonce(struct handshake_state *s);
 void handshake_state_new_anonce(struct handshake_state *s);
 void handshake_state_set_anonce(struct handshake_state *s,
 				const uint8_t *anonce);
+
+void handshake_state_set_authenticator(struct handshake_state *s, bool auth);
 
 bool handshake_state_derive_ptk(struct handshake_state *s);
 const struct crypto_ptk *handshake_state_get_ptk(struct handshake_state *s);
