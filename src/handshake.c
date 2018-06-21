@@ -342,7 +342,8 @@ void handshake_state_install_ptk(struct handshake_state *s)
 		uint32_t cipher = ie_rsn_cipher_suite_to_cipher(
 							s->pairwise_cipher);
 
-		install_tk(s->ifindex, s->aa, ptk->tk, cipher, s->user_data);
+		install_tk(s, s->aa, ptk->tk, cipher,
+				default_key, s->user_data);
 	}
 }
 
@@ -355,7 +356,7 @@ void handshake_state_install_gtk(struct handshake_state *s,
 		uint32_t cipher =
 			ie_rsn_cipher_suite_to_cipher(s->group_cipher);
 
-		install_gtk(s->ifindex, gtk_key_index, gtk, gtk_len,
+		install_gtk(s, gtk_key_index, gtk, gtk_len,
 				rsc, rsc_len, cipher, s->user_data);
 	}
 }
@@ -370,7 +371,7 @@ void handshake_state_install_igtk(struct handshake_state *s,
 			ie_rsn_cipher_suite_to_cipher(
 						s->group_management_cipher);
 
-		install_igtk(s->ifindex, igtk_key_index, igtk, igtk_len,
+		install_igtk(s, igtk_key_index, igtk, igtk_len,
 				ipn, 6, cipher, s->user_data);
 	}
 }

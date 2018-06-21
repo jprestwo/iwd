@@ -40,26 +40,6 @@ enum handshake_kde {
 	HANDSHAKE_KDE_MULTIBAND_KEY_ID	= 0x000fac0c,
 };
 
-typedef bool (*handshake_get_nonce_func_t)(uint8_t nonce[]);
-typedef void (*handshake_install_tk_func_t)(uint32_t ifindex, const uint8_t *aa,
-					const uint8_t *tk, uint32_t cipher,
-					void *user_data);
-typedef void (*handshake_install_gtk_func_t)(uint32_t ifindex,
-					uint8_t key_index,
-					const uint8_t *gtk, uint8_t gtk_len,
-					const uint8_t *rsc, uint8_t rsc_len,
-					uint32_t cipher, void *user_data);
-typedef void (*handshake_install_igtk_func_t)(uint32_t ifindex,
-					uint8_t key_index,
-					const uint8_t *igtk, uint8_t igtk_len,
-					const uint8_t *ipn, uint8_t ipn_len,
-					uint32_t cipher, void *user_data);
-
-void __handshake_set_get_nonce_func(handshake_get_nonce_func_t func);
-void __handshake_set_install_tk_func(handshake_install_tk_func_t func);
-void __handshake_set_install_gtk_func(handshake_install_gtk_func_t func);
-void __handshake_set_install_igtk_func(handshake_install_igtk_func_t func);
-
 struct handshake_state {
 	uint32_t ifindex;
 	uint8_t spa[6];
@@ -94,6 +74,26 @@ struct handshake_state {
 	uint8_t r1khid[6];
 	void *user_data;
 };
+
+typedef bool (*handshake_get_nonce_func_t)(uint8_t nonce[]);
+typedef void (*handshake_install_tk_func_t)(struct handshake_state *hs,
+					const uint8_t *addr, const uint8_t *tk,
+					uint32_t cipher, void *user_data);
+typedef void (*handshake_install_gtk_func_t)(struct handshake_state *hs,
+					uint8_t key_index,
+					const uint8_t *gtk, uint8_t gtk_len,
+					const uint8_t *rsc, uint8_t rsc_len,
+					uint32_t cipher, void *user_data);
+typedef void (*handshake_install_igtk_func_t)(struct handshake_state *hs,
+					uint8_t key_index,
+					const uint8_t *igtk, uint8_t igtk_len,
+					const uint8_t *ipn, uint8_t ipn_len,
+					uint32_t cipher, void *user_data);
+
+void __handshake_set_get_nonce_func(handshake_get_nonce_func_t func);
+void __handshake_set_install_tk_func(handshake_install_tk_func_t func);
+void __handshake_set_install_gtk_func(handshake_install_gtk_func_t func);
+void __handshake_set_install_igtk_func(handshake_install_igtk_func_t func);
 
 struct handshake_state *handshake_state_new(uint32_t ifindex);
 void handshake_state_free(struct handshake_state *s);
