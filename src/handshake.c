@@ -344,11 +344,11 @@ void handshake_state_install_ptk(struct handshake_state *s)
 	s->ptk_complete = true;
 
 	if (install_tk) {
+		uint8_t *addr = s->authenticator ? s->spa : s->aa;
 		uint32_t cipher = ie_rsn_cipher_suite_to_cipher(
 							s->pairwise_cipher);
 
-		install_tk(s, s->aa, ptk->tk, cipher,
-				default_key, s->user_data);
+		install_tk(s, addr, ptk->tk, cipher, s->user_data);
 	}
 }
 
