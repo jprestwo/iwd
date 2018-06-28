@@ -82,11 +82,14 @@ struct netdev {
 	netdev_connect_cb_t connect_cb;
 	netdev_disconnect_cb_t disconnect_cb;
 	netdev_neighbor_report_cb_t neighbor_report_cb;
+	netdev_adhoc_cb_t adhoc_cb;
 	void *user_data;
 	struct eapol_sm *sm;
 	struct handshake_state *handshake;
 	uint32_t connect_cmd_id;
 	uint32_t disconnect_cmd_id;
+	uint32_t join_adhoc_cmd_id;
+	uint32_t leave_adhoc_cmd_id;
 	enum netdev_result result;
 	struct l_timeout *neighbor_report_timeout;
 	struct l_timeout *sa_query_timeout;
@@ -586,6 +589,16 @@ static void netdev_free(void *data)
 
 		netdev->disconnect_cb = NULL;
 		netdev->user_data = NULL;
+	}
+
+	if (netdev->join_adhoc_cmd_id) {
+		l_genl_family_cancel(nl80211, netdev->join_adhoc_cmd_id);
+		netdev->join_adhoc_cmd_id = 0;
+	}
+
+	if (netdev->leave_adhoc_cmd_id) {
+		l_genl_family_cancel(nl80211, netdev->leave_adhoc_cmd_id);
+		netdev->leave_adhoc_cmd_id = 0;
 	}
 
 	device_remove(netdev->device);
@@ -2444,6 +2457,113 @@ int netdev_reassociate(struct netdev *netdev, struct scan_bss *target_bss,
 		handshake_state_free(old_hs);
 
 	return err;
+}
+
+static void netdev_join_adhoc_cb(struct l_genl_msg *msg, void *user_data)
+{
+	struct netdev *netdev = user_data;
+
+	netdev->join_adhoc_cmd_id = 0;
+
+	if (netdev->adhoc_cb)
+		netdev->adhoc_cb(netdev, l_genl_msg_get_error(msg),
+				netdev->user_data);
+
+	netdev->adhoc_cb = NULL;
+}
+
+int netdev_join_adhoc(struct netdev *netdev, const char *ssid,
+			netdev_adhoc_cb_t cb, void *user_data)
+{
+	struct l_genl_msg *cmd;
+	uint32_t ifindex = device_get_ifindex(netdev->device);
+	uint32_t ch_freq = scan_channel_to_freq(6, SCAN_BAND_2_4_GHZ);
+	uint32_t ch_type = NL80211_CHAN_NO_HT;
+	uint8_t ie_elems[32];
+	struct ie_rsn_info rsn;
+
+	if (netdev->type != NL80211_IFTYPE_ADHOC) {
+		l_error("iftype is invalid for adhoc: %u\n",
+				netdev_get_iftype(netdev));
+		return -EINVAL;
+	}
+
+	/* leave/join use same callback, so if either is pending return busy */
+	if (netdev->adhoc_cb)
+		return -EBUSY;
+
+	netdev->adhoc_cb = cb;
+	netdev->user_data = user_data;
+
+	/*
+	 * TODO: Currently the only configurable Ad-Hoc option is the SSID/PSK.
+	 * Other values are hard coded here as they are with AP. Eventually this
+	 * needs to be configurable and made common so AP could also be
+	 * configured for things like frequency, channel, and RSN elements.
+	 */
+	memset(&rsn, 0, sizeof(rsn));
+	rsn.akm_suites = IE_RSN_AKM_SUITE_PSK;
+	rsn.pairwise_ciphers = wiphy_select_cipher(netdev->wiphy, 0xffff);
+	rsn.group_cipher = IE_RSN_CIPHER_SUITE_NO_GROUP_TRAFFIC;
+	ie_build_rsne(&rsn, ie_elems);
+
+	cmd = l_genl_msg_new_sized(NL80211_CMD_JOIN_IBSS, 128);
+
+	l_genl_msg_append_attr(cmd, NL80211_ATTR_IFINDEX, 4, &ifindex);
+	l_genl_msg_append_attr(cmd, NL80211_ATTR_SSID, strlen(ssid), ssid);
+	l_genl_msg_append_attr(cmd, NL80211_ATTR_WIPHY_FREQ, 4, &ch_freq);
+	l_genl_msg_append_attr(cmd, NL80211_ATTR_WIPHY_CHANNEL_TYPE, 4,
+			&ch_type);
+	l_genl_msg_append_attr(cmd, NL80211_ATTR_CONTROL_PORT, 0, NULL);
+	l_genl_msg_append_attr(cmd, NL80211_ATTR_PRIVACY, 0, NULL);
+	l_genl_msg_append_attr(cmd, NL80211_ATTR_SOCKET_OWNER, 0, NULL);
+	l_genl_msg_append_attr(cmd, NL80211_ATTR_IE, 2 + ie_elems[1], ie_elems);
+
+	netdev->join_adhoc_cmd_id = l_genl_family_send(nl80211, cmd,
+			netdev_join_adhoc_cb, netdev, NULL);
+
+	return 0;
+}
+
+static void netdev_leave_adhoc_cb(struct l_genl_msg *msg, void *user_data)
+{
+	struct netdev *netdev = user_data;
+
+	netdev->leave_adhoc_cmd_id = 0;
+
+	if (netdev->adhoc_cb)
+		netdev->adhoc_cb(netdev, l_genl_msg_get_error(msg),
+				netdev->user_data);
+
+	netdev->adhoc_cb = NULL;
+}
+
+int netdev_leave_adhoc(struct netdev *netdev, netdev_adhoc_cb_t cb,
+			void *user_data)
+{
+	struct l_genl_msg *cmd;
+
+	if (netdev->type != NL80211_IFTYPE_ADHOC) {
+		l_error("iftype is invalid for adhoc: %u\n",
+				netdev_get_iftype(netdev));
+		return -EINVAL;
+	}
+
+	/* leave/join use same callback, so if either is pending return busy */
+	if (netdev->adhoc_cb)
+		return -EBUSY;
+
+	netdev->adhoc_cb = cb;
+	netdev->user_data = user_data;
+
+	cmd = l_genl_msg_new_sized(NL80211_CMD_LEAVE_IBSS, 64);
+
+	l_genl_msg_append_attr(cmd, NL80211_ATTR_IFINDEX, 4, &netdev->index);
+
+	netdev->leave_adhoc_cmd_id = l_genl_family_send(nl80211, cmd,
+			netdev_leave_adhoc_cb, netdev, NULL);
+
+	return 0;
 }
 
 /*
