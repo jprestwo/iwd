@@ -2092,6 +2092,8 @@ static struct l_dbus_message *device_set_mode_adhoc(struct device *device,
 
 	adhoc_add_interface(device);
 
+	l_debug("ifindex=%u", netdev_get_ifindex(device->netdev));
+
 	return NULL;
 }
 
@@ -2105,7 +2107,7 @@ static struct l_dbus_message *device_set_mode_ap(struct device *device,
 			device->state != DEVICE_STATE_AUTOCONNECT)
 		return dbus_error_busy(message);
 
-	l_debug("");
+	l_debug("ifindex=%u", netdev_get_ifindex(device->netdev));
 
 	periodic_scan_stop(device);
 
@@ -2157,7 +2159,7 @@ static struct l_dbus_message *device_set_mode_sta(struct device *device,
 
 	device->mode = DEVICE_MODE_STATION;
 
-	l_debug("");
+	l_debug("ifindex=%u", netdev_get_ifindex(device->netdev));
 
 	return NULL;
 }
