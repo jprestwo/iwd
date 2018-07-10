@@ -108,3 +108,18 @@ void __watchlist_prune_stale(struct watchlist *watchlist);
 		if ((watchlist)->stale_items)				\
 			__watchlist_prune_stale(watchlist);		\
 	} while	(false)
+
+#define WATCHLIST_HAS_MATCHES(watchlist, match, match_data) \
+	({								\
+		const struct l_queue_entry *entry =			\
+				l_queue_get_entries((watchlist)->items);\
+									\
+		(watchlist)->in_notify = true;				\
+		for (; entry; entry = entry->next) {			\
+			struct watchlist_item *item = entry->data;	\
+									\
+			if (match(item, match_data))			\
+				true;					\
+		}							\
+		false;							\
+	})

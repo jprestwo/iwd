@@ -46,6 +46,7 @@ struct adhoc_state {
 	struct l_queue *sta_states;
 	uint32_t sta_watch_id;
 	uint32_t netdev_watch_id;
+	uint32_t eapol_watch_id;
 	struct l_dbus_message *pending;
 	bool started : 1;
 };
@@ -319,6 +320,18 @@ static void adhoc_station_changed_cb(struct netdev *netdev,
 		adhoc_del_station(adhoc, mac);
 }
 
+static void adhoc_eapol_event(enum eapol_event event, const void *event_data,
+				void *user_data)
+{
+	switch (event) {
+	case EAPOL_EVENT_RX_UNMATCHED_FRAME:
+		adhoc_new_station((struct adhoc_state *) user_data, event_data);
+		break;
+	default:
+		break;
+	}
+}
+
 static void adhoc_join_cb(struct netdev *netdev, int result, void *user_data)
 {
 	struct adhoc_state *adhoc = user_data;
@@ -362,6 +375,9 @@ static struct l_dbus_message *adhoc_dbus_start(struct l_dbus *dbus,
 	adhoc->ssid = l_strdup(ssid);
 	adhoc->pending = l_dbus_message_ref(message);
 	adhoc->sta_states = l_queue_new();
+	adhoc->eapol_watch_id = eapol_event_watch_add(
+					netdev_get_ifindex(netdev),
+					adhoc_eapol_event, adhoc);
 
 	if (crypto_psk_from_passphrase(wpa2_psk, (uint8_t *) ssid,
 			strlen(ssid), adhoc->pmk))

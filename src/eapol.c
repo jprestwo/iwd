@@ -49,6 +49,8 @@ void *tx_user_data;
 
 uint32_t next_frame_watch_id;
 
+struct watchlist event_watches;
+
 #define VERIFY_IS_ZERO(field)						\
 	do {								\
 		if (!util_mem_is_zero((field), sizeof((field))))	\
@@ -645,6 +647,7 @@ struct eapol_sm {
 	struct handshake_state *handshake;
 	enum eapol_protocol_version protocol_version;
 	uint64_t replay_counter;
+	struct watchlist events;
 	eapol_sm_event_func_t event_func;
 	void *user_data;
 	struct l_timeout *timeout;
@@ -2109,6 +2112,19 @@ bool eapol_frame_watch_remove(uint32_t id)
 	return watchlist_remove(&frame_watches, id);
 }
 
+uint32_t eapol_event_watch_add(uint32_t ifindex,
+				eapol_event_watch_func_t handler,
+				void *user_data)
+{
+	struct eapol_frame_watch *efw;
+
+	efw = l_new(struct eapol_frame_watch, 1);
+	efw->ifindex = ifindex;
+
+	return watchlist_link(&event_watches, &efw->super,
+				handler, user_data, NULL);
+}
+
 struct preauth_sm {
 	uint32_t ifindex;
 	uint8_t aa[6];
@@ -2343,6 +2359,12 @@ void __eapol_rx_packet(uint32_t ifindex, const uint8_t *src, uint16_t proto,
 
 	if (len < sizeof(struct eapol_header) + L_BE16_TO_CPU(eh->packet_len))
 		return;
+
+	if (!WATCHLIST_HAS_MATCHES(&frame_watches,
+					eapol_frame_watch_match_ifindex,
+					L_UINT_TO_PTR(ifindex)))
+		WATCHLIST_NOTIFY(&event_watches, eapol_event_watch_func_t,
+				EAPOL_EVENT_RX_UNMATCHED_FRAME, src);
 
 	WATCHLIST_NOTIFY_MATCHES(&frame_watches,
 					eapol_frame_watch_match_ifindex,
