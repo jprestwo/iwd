@@ -77,6 +77,7 @@ bool eapol_calculate_mic(const uint8_t *kck, const struct eapol_key *frame,
 	case EAPOL_KEY_DESCRIPTOR_VERSION_HMAC_SHA1_AES:
 		return hmac_sha1(kck, 16, frame, frame_len, mic, 16);
 	case EAPOL_KEY_DESCRIPTOR_VERSION_AES_128_CMAC_AES:
+	case EAPOL_KEY_DESCRIPTOR_VERSION_AKM_DEFINED:
 		return cmac_aes(kck, 16, frame, frame_len, mic, 16);
 	default:
 		return false;
@@ -110,6 +111,7 @@ bool eapol_verify_mic(const uint8_t *kck, const struct eapol_key *frame)
 		checksum = l_checksum_new_hmac(L_CHECKSUM_SHA1, kck, 16);
 		break;
 	case EAPOL_KEY_DESCRIPTOR_VERSION_AES_128_CMAC_AES:
+	case EAPOL_KEY_DESCRIPTOR_VERSION_AKM_DEFINED:
 		checksum = l_checksum_new_cmac_aes(kck, 16);
 		break;
 	default:
@@ -144,6 +146,7 @@ uint8_t *eapol_decrypt_key_data(const uint8_t *kek,
 		break;
 	case EAPOL_KEY_DESCRIPTOR_VERSION_HMAC_SHA1_AES:
 	case EAPOL_KEY_DESCRIPTOR_VERSION_AES_128_CMAC_AES:
+	case EAPOL_KEY_DESCRIPTOR_VERSION_AKM_DEFINED:
 		if (key_data_len < 24 || key_data_len % 8)
 			return NULL;
 
@@ -174,6 +177,7 @@ uint8_t *eapol_decrypt_key_data(const uint8_t *kek,
 	}
 	case EAPOL_KEY_DESCRIPTOR_VERSION_HMAC_SHA1_AES:
 	case EAPOL_KEY_DESCRIPTOR_VERSION_AES_128_CMAC_AES:
+	case EAPOL_KEY_DESCRIPTOR_VERSION_AKM_DEFINED:
 		if (!aes_unwrap(kek, key_data, key_data_len, buf))
 			goto error;
 
@@ -277,6 +281,7 @@ const struct eapol_key *eapol_key_validate(const uint8_t *frame, size_t len)
 	case EAPOL_KEY_DESCRIPTOR_VERSION_HMAC_MD5_ARC4:
 	case EAPOL_KEY_DESCRIPTOR_VERSION_HMAC_SHA1_AES:
 	case EAPOL_KEY_DESCRIPTOR_VERSION_AES_128_CMAC_AES:
+	case EAPOL_KEY_DESCRIPTOR_VERSION_AKM_DEFINED:
 		break;
 	default:
 		return NULL;
