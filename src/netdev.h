@@ -144,6 +144,8 @@ int netdev_join_adhoc(struct netdev *netdev, const char *ssid,
 int netdev_leave_adhoc(struct netdev *netdev, netdev_adhoc_cb_t cb,
 			void *user_data);
 
+int netdev_associate(struct handshake_state *hs);
+
 int netdev_set_powered(struct netdev *netdev, bool powered,
 				netdev_set_powered_cb_t cb, void *user_data,
 				netdev_destroy_func_t destroy);
