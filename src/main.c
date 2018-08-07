@@ -47,6 +47,7 @@
 #include "src/plugin.h"
 #include "src/simauth.h"
 #include "src/adhoc.h"
+#include "src/sae.h"
 
 #include "src/backtrace.h"
 
@@ -441,6 +442,7 @@ int main(int argc, char *argv[])
 	wsc_init();
 	eap_init(eap_mtu);
 	eapol_init();
+	sae_init();
 	network_init();
 	known_networks_init();
 	rfkill_init();
@@ -455,6 +457,7 @@ int main(int argc, char *argv[])
 	rfkill_exit();
 	known_networks_exit();
 	network_exit();
+	sae_exit();
 	eapol_exit();
 	eap_exit();
 	wsc_exit();
