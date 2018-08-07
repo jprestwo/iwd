@@ -54,6 +54,7 @@
 #include "src/ftutil.h"
 #include "src/util.h"
 #include "src/watchlist.h"
+#include "src/sae.h"
 
 #ifndef ENOTSUPP
 #define ENOTSUPP 524
@@ -85,6 +86,7 @@ struct netdev {
 	netdev_adhoc_cb_t adhoc_cb;
 	void *user_data;
 	struct eapol_sm *sm;
+	struct sae_sm *sae_sm;
 	struct handshake_state *handshake;
 	uint32_t connect_cmd_id;
 	uint32_t disconnect_cmd_id;
@@ -505,6 +507,11 @@ static void netdev_connect_free(struct netdev *netdev)
 	if (netdev->sm) {
 		eapol_sm_free(netdev->sm);
 		netdev->sm = NULL;
+	}
+
+	if (netdev->sae_sm) {
+		sae_sm_free(netdev->sae_sm);
+		netdev->sae_sm = NULL;
 	}
 
 	eapol_preauth_cancel(netdev->index);
@@ -1957,68 +1964,19 @@ static void netdev_cmd_ft_reassociate_cb(struct l_genl_msg *msg,
 	}
 }
 
-static void netdev_authenticate_event(struct l_genl_msg *msg,
-							struct netdev *netdev)
+static void netdev_ft_process(struct netdev *netdev, const uint8_t *frame,
+		size_t frame_len)
 {
 	struct l_genl_msg *cmd_associate, *cmd_deauth;
-	struct l_genl_attr attr;
-	uint16_t type, len;
-	const void *data;
 	uint16_t status_code;
 	const uint8_t *ies = NULL;
 	size_t ies_len;
-	const uint8_t *frame = NULL;
-	size_t frame_len = 0;
 	struct ie_tlv_iter iter;
 	const uint8_t *rsne = NULL;
 	const uint8_t *mde = NULL;
 	const uint8_t *fte = NULL;
 	struct handshake_state *hs = netdev->handshake;
 	bool is_rsn;
-
-	l_debug("");
-
-	if (!netdev->connected) {
-		l_warn("Unexpected connection related event -- "
-				"is another supplicant running?");
-		return;
-	}
-
-	/*
-	 * During Fast Transition we use the authenticate event to start the
-	 * reassociation step because the FTE necessary before we can build
-	 * the FT Associate command is included in the attached frame and is
-	 * not available in the Authenticate command callback.
-	 */
-	if (!netdev->in_ft)
-		return;
-
-	if (!l_genl_attr_init(&attr, msg)) {
-		l_debug("attr init failed");
-
-		goto auth_error;
-	}
-
-	while (l_genl_attr_next(&attr, &type, &len, &data)) {
-		switch (type) {
-		case NL80211_ATTR_TIMED_OUT:
-			l_warn("authentication timed out");
-
-			goto auth_error;
-
-		case NL80211_ATTR_FRAME:
-			if (frame)
-				goto auth_error;
-
-			frame = data;
-			frame_len = len;
-			break;
-		}
-	}
-
-	if (!frame)
-		goto auth_error;
-
 	/*
 	 * Parse the Authentication Response and validate the contents
 	 * according to 12.5.2 / 12.5.4: RSN or non-RSN Over-the-air
@@ -2195,6 +2153,80 @@ ft_error:
 							netdev, NULL);
 }
 
+static void netdev_sae_process(struct netdev *netdev, const uint8_t *from,
+				const uint8_t *frame, size_t frame_len)
+{
+	__sae_rx_packet(netdev->index, from, frame, frame_len);
+}
+
+static void netdev_authenticate_event(struct l_genl_msg *msg,
+							struct netdev *netdev)
+{
+	struct l_genl_attr attr;
+	uint16_t type, len;
+	const void *data;
+	const uint8_t *frame = NULL;
+	size_t frame_len = 0;
+
+	l_debug("");
+
+	if (!netdev->connected) {
+		l_warn("Unexpected connection related event -- "
+				"is another supplicant running?");
+		return;
+	}
+
+	/*
+	 * During Fast Transition we use the authenticate event to start the
+	 * reassociation step because the FTE necessary before we can build
+	 * the FT Associate command is included in the attached frame and is
+	 * not available in the Authenticate command callback.
+	 */
+	if (!netdev->in_ft && !netdev->sae_sm)
+		return;
+
+	if (!l_genl_attr_init(&attr, msg)) {
+		l_debug("attr init failed");
+
+		goto auth_error;
+	}
+
+	while (l_genl_attr_next(&attr, &type, &len, &data)) {
+		switch (type) {
+		case NL80211_ATTR_TIMED_OUT:
+			l_warn("authentication timed out");
+
+			goto auth_error;
+
+		case NL80211_ATTR_FRAME:
+			if (frame)
+				goto auth_error;
+
+			frame = data;
+			frame_len = len;
+			break;
+		}
+	}
+
+	if (!frame)
+		goto auth_error;
+
+	if (netdev->in_ft)
+		netdev_ft_process(netdev, frame, frame_len);
+	else if (netdev->sae_sm)
+		netdev_sae_process(netdev,
+				((struct mmpdu_header *)frame)->address_2,
+				frame + 26, frame_len - 26);
+	else
+		goto auth_error;
+
+	return;
+
+auth_error:
+	netdev->result = NETDEV_RESULT_AUTHENTICATION_FAILED;
+	netdev_connect_failed(NULL, netdev);
+}
+
 static void netdev_associate_event(struct l_genl_msg *msg,
 							struct netdev *netdev)
 {
@@ -2213,6 +2245,10 @@ static void netdev_cmd_connect_cb(struct l_genl_msg *msg, void *user_data)
 			netdev->event_filter(netdev,
 						NETDEV_EVENT_ASSOCIATING,
 						netdev->user_data);
+
+		/* with SAE the eapol_sm has not yet been created */
+		if (netdev->sae_sm)
+			netdev->sm = eapol_sm_new(netdev->handshake);
 
 		/*
 		 * We register the eapol state machine here, in case the PAE
@@ -2355,13 +2391,15 @@ static int netdev_connect_common(struct netdev *netdev,
 					netdev_event_func_t event_filter,
 					netdev_connect_cb_t cb, void *user_data)
 {
-	netdev->connect_cmd_id = l_genl_family_send(nl80211, cmd_connect,
-							netdev_cmd_connect_cb,
-							netdev, NULL);
+	if (cmd_connect) {
+		netdev->connect_cmd_id = l_genl_family_send(nl80211,
+					cmd_connect, netdev_cmd_connect_cb,
+					netdev, NULL);
 
-	if (!netdev->connect_cmd_id) {
-		l_genl_msg_unref(cmd_connect);
-		return -EIO;
+		if (!netdev->connect_cmd_id) {
+			l_genl_msg_unref(cmd_connect);
+			return -EIO;
+		}
 	}
 
 	netdev->event_filter = event_filter;
@@ -2378,6 +2416,9 @@ static int netdev_connect_common(struct netdev *netdev,
 	handshake_state_set_authenticator_address(hs, bss->addr);
 	handshake_state_set_supplicant_address(hs, netdev->addr);
 
+	if (netdev->sae_sm)
+		sae_register(netdev->sae_sm);
+
 	return 0;
 }
 
@@ -2386,7 +2427,7 @@ int netdev_connect(struct netdev *netdev, struct scan_bss *bss,
 				netdev_event_func_t event_filter,
 				netdev_connect_cb_t cb, void *user_data)
 {
-	struct l_genl_msg *cmd_connect;
+	struct l_genl_msg *cmd_connect = NULL;
 	struct eapol_sm *sm = NULL;
 	bool is_rsn = hs->own_ie != NULL;
 
@@ -2396,12 +2437,17 @@ int netdev_connect(struct netdev *netdev, struct scan_bss *bss,
 	if (netdev->connected)
 		return -EISCONN;
 
-	cmd_connect = netdev_build_cmd_connect(netdev, bss, hs, NULL);
-	if (!cmd_connect)
-		return -EINVAL;
+	if (hs->akm_suite == IE_RSN_AKM_SUITE_SAE_SHA256) {
+		netdev->sae_sm = sae_sm_new(hs);
+	} else {
+		cmd_connect = netdev_build_cmd_connect(netdev, bss, hs, NULL);
 
-	if (is_rsn)
-		sm = eapol_sm_new(hs);
+		if (!cmd_connect)
+			return -EINVAL;
+
+		if (is_rsn)
+			sm = eapol_sm_new(hs);
+	}
 
 	return netdev_connect_common(netdev, cmd_connect, bss, hs, sm,
 						event_filter, cb, user_data);
@@ -3547,6 +3593,48 @@ static int netdev_control_port_frame(uint32_t ifindex,
 	return 0;
 }
 
+static void netdev_tx_auth_frame_cb(struct l_genl_msg *msg,
+							void *user_data)
+{
+	int err = l_genl_msg_get_error(msg);
+
+	if (err < 0)
+		l_info("CMD_AUTHENTICATE failed: %s", strerror(err));
+}
+
+
+static int netdev_tx_auth_frame(uint32_t ifindex, const uint8_t *dest,
+		const uint8_t *body, size_t body_len, void *user_data)
+{
+	struct l_genl_msg *msg;
+	struct netdev *netdev;
+	uint32_t auth_type = NL80211_AUTHTYPE_SAE;
+
+	netdev = netdev_find(ifindex);
+	if (!netdev)
+		return -ENOENT;
+
+	msg = l_genl_msg_new_sized(NL80211_CMD_AUTHENTICATE, 512);
+	l_genl_msg_append_attr(msg, NL80211_ATTR_IFINDEX, 4, &netdev->index);
+	l_genl_msg_append_attr(msg, NL80211_ATTR_WIPHY_FREQ,
+						4, &netdev->frequency);
+	l_genl_msg_append_attr(msg, NL80211_ATTR_MAC, ETH_ALEN, dest);
+	l_genl_msg_append_attr(msg, NL80211_ATTR_SSID,
+				strlen((char *) netdev->handshake->ssid),
+				netdev->handshake->ssid);
+	l_genl_msg_append_attr(msg, NL80211_ATTR_AUTH_TYPE, 4, &auth_type);
+
+	l_genl_msg_append_attr(msg, NL80211_ATTR_AUTH_DATA, body_len, body);
+
+	if (!l_genl_family_send(nl80211, msg, netdev_tx_auth_frame_cb,
+				netdev, NULL)) {
+		l_genl_msg_unref(msg);
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
 static void netdev_unicast_notify(struct l_genl_msg *msg, void *user_data)
 {
 	struct netdev *netdev = NULL;
@@ -4483,6 +4571,8 @@ bool netdev_init(struct l_genl_family *in,
 
 	__eapol_set_rekey_offload_func(netdev_set_rekey_offload);
 	__eapol_set_tx_packet_func(netdev_control_port_frame);
+
+	__sae_set_tx_packet_func(netdev_tx_auth_frame);
 
 	if (whitelist)
 		whitelist_filter = l_strsplit(whitelist, ',');

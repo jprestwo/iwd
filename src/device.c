@@ -664,6 +664,9 @@ static void device_handshake_event(struct handshake_state *hs,
 	struct network *network = device->connected_network;
 
 	switch (event) {
+	case HANDSHAKE_EVENT_SAE_STARTED:
+		l_debug("SAE starting");
+		break;
 	case HANDSHAKE_EVENT_STARTED:
 		l_debug("Handshaking");
 		break;
@@ -674,6 +677,7 @@ static void device_handshake_event(struct handshake_state *hs,
 		network_sync_psk(network);
 		break;
 	case HANDSHAKE_EVENT_FAILED:
+	case HANDSHAKE_EVENT_SAE_FAILED:
 		netdev_handshake_failed(hs, l_get_u16(event_data));
 		break;
 	case HANDSHAKE_EVENT_SETTING_KEYS_FAILED:
@@ -779,10 +783,15 @@ static struct handshake_state *device_handshake_setup(struct device *device,
 			handshake_state_set_own_wpa(hs, rsne_buf);
 		}
 
-		if (security == SECURITY_PSK)
-			handshake_state_set_pmk(hs, network_get_psk(network),
-						32);
-		else
+		if (security == SECURITY_PSK) {
+			/* SAE will generate/set the PMK */
+			if (info.akm_suites == IE_RSN_AKM_SUITE_SAE_SHA256)
+				handshake_state_set_passphrase(hs,
+					network_get_passphrase(network));
+			else
+				handshake_state_set_pmk(hs,
+						network_get_psk(network), 32);
+		} else
 			handshake_state_set_8021x_config(hs,
 						network_get_settings(network));
 
