@@ -2282,6 +2282,9 @@ static void nl80211_ready(void *user_data)
 	struct l_genl_msg *msg;
 
 	msg = l_genl_msg_new(HWSIM_CMD_GET_RADIO);
+
+	l_debug("\n\n\n");
+
 	if (!l_genl_family_dump(hwsim, msg, get_radio_callback,
 				NULL, get_radio_done_initial)) {
 		l_error("Getting hwsim radio information failed");
