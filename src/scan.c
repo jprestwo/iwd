@@ -45,6 +45,7 @@
 #include "src/knownnetworks.h"
 #include "src/util.h"
 #include "src/scan.h"
+#include "src/htutil.h"
 
 #define SCAN_MAX_INTERVAL 320
 #define SCAN_INIT_INTERVAL 10
@@ -862,6 +863,14 @@ static bool scan_parse_bss_information_elements(struct scan_bss *bss,
 			bss->cc_present = true;
 
 			break;
+		case IE_TYPE_HT_CAPABILITIES:
+			if (iter.len < 26)
+				return false;
+
+			bss->ht_capable = true;
+			memcpy(bss->ht, iter.data, 26);
+
+			break;
 		}
 	}
 
@@ -914,6 +923,14 @@ static struct scan_bss *scan_parse_attr_bss(struct l_genl_attr *attr)
 			break;
 		}
 	}
+
+	/*
+	 * Computing data rate requires both the HT IE and the signal strength,
+	 * so this must be done after we know both have been parsed.
+	 */
+	if (bss->ht_capable)
+		ht_calculate_data_rate(bss->ht, bss->signal_strength / 100,
+						&bss->data_rate);
 
 	return bss;
 
@@ -1052,6 +1069,18 @@ static void scan_bss_compute_rank(struct scan_bss *bss)
 		 * Section 6.5.5.2
 		 */
 		factor = factor * max / 108 + RANK_MIN_SUPPORTED_RATE_FACTOR;
+		rank *= factor;
+	}
+
+	if (bss->ht_capable && bss->data_rate) {
+		double factor = (double)bss->data_rate / 1000000; /* Mbps */
+
+		/*
+		 * TODO: This will HEAVILY rank high throughput APs, since this
+		 * factor could be as high as 600. We may need a better way
+		 * to rank this where we scale the higher throughputs down so
+		 * they dont completely throw off the ranking.
+		 */
 		rank *= factor;
 	}
 

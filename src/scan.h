@@ -58,9 +58,12 @@ struct scan_bss {
 	uint8_t utilization;
 	uint8_t cc[3];
 	uint16_t rank;
+	uint8_t ht[26];
+	uint64_t data_rate;
 	bool mde_present : 1;
 	bool cc_present : 1;
 	bool cap_rm_neighbor_report : 1;
+	bool ht_capable : 1;
 };
 
 struct scan_parameters {
