@@ -2350,6 +2350,9 @@ static void hwsim_ready(void *user_data)
 						HWSIM_ATTR_SUPPORT_P2P_DEVICE,
 						0, NULL);
 
+		l_genl_msg_append_attr(msg, HWSIM_ATTR_REG_HINT_ALPHA2,
+						strlen("US"), "US" );
+
 		l_genl_family_send(hwsim, msg, create_callback, NULL, NULL);
 
 		break;

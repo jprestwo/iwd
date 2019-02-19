@@ -308,6 +308,13 @@ enum ie_bss_capability {
 	IE_BSS_CAP_PRIVACY = 0x0010,
 };
 
+/* Maps to nl80211.h nl80211_bss_scan_width */
+enum ie_bss_chan_width {
+	IE_BSS_CHAN_WIDTH_20,
+	IE_BSS_CHAN_WIDTH_10,
+	IE_BSS_CHAN_WIDTH_5,
+};
+
 struct ie_ft_info {
 	uint8_t mic_element_count;
 	uint8_t mic[16];
@@ -410,10 +417,19 @@ int ie_parse_bss_load_from_data(const uint8_t *data, uint8_t len,
 				uint8_t *out_channel_utilization,
 				uint16_t *out_admission_capacity);
 
-int ie_parse_supported_rates(struct ie_tlv_iter *iter,
-				struct l_uintset **set);
+int ie_parse_supported_rates(struct ie_tlv_iter *iter, int32_t rssi,
+				uint32_t chan_width, uint8_t *data_rate);
 int ie_parse_supported_rates_from_data(const uint8_t *data, uint8_t len,
-				struct l_uintset **set);
+					int32_t rssi, uint32_t chan_width,
+					uint8_t *data_rate);
+int ie_parse_ht_capability(struct ie_tlv_iter *iter, int32_t rssi,
+				uint64_t *data_rate);
+int ie_parse_ht_capability_from_data(const uint8_t *data, uint8_t len,
+				int32_t rssi, uint64_t *data_rate);
+int ie_parse_vht_capability(struct ie_tlv_iter *iter, int32_t rssi,
+				uint64_t *data_rate);
+int ie_parse_vht_capability_from_data(const uint8_t *data, size_t len,
+					int32_t rssi, uint64_t *data_rate);
 
 int ie_parse_mobility_domain(struct ie_tlv_iter *iter, uint16_t *mdid,
 				bool *ft_over_ds, bool *resource_req);

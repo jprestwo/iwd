@@ -453,6 +453,7 @@ static void parse_supported_frequencies(struct wiphy *wiphy,
 			switch (type) {
 			case NL80211_FREQUENCY_ATTR_FREQ:
 				u32 = *((uint32_t *) data);
+				l_debug("FREQ: %u\n", u32);
 				scan_freq_set_add(wiphy->supported_freqs, u32);
 				break;
 			}
@@ -557,6 +558,8 @@ static void wiphy_parse_attributes(struct wiphy *wiphy,
 			if (l_genl_attr_recurse(attr, &nested))
 				parse_supported_iftypes(wiphy, &nested);
 			break;
+		default:
+			l_debug("NOT CAUGHT: %u", type);
 		}
 	}
 

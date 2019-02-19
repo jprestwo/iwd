@@ -4,6 +4,11 @@ scripts/config --enable CONFIG_MAC80211_HWSIM
 scripts/config --enable CONFIG_NLMON
 scripts/config --enable CONFIG_VLAN_8021Q
 
+# Options required for skipping regulatory database verification
+# (only required for test-runner, these should not be enabled otherwise)
+scripts/config --enable CONFIG_EXPERT
+scripts/config --enable CONFIG_CFG80211_CERTIFICATION_ONUS
+
 scripts/config --enable CONFIG_CRYPTO_USER_API_SKCIPHER
 scripts/config --enable CONFIG_CRYPTO_USER_API_HASH
 scripts/config --enable CONFIG_CRYPTO_RSA

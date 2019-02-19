@@ -25,3 +25,5 @@
 
 bool ht_calculate_data_rate(const uint8_t ht_ie[26], int32_t rssi,
 				uint64_t *data_rate);
+bool basic_calculate_data_rate(struct l_uintset *rates, int32_t rssi,
+				uint32_t chan_width, uint8_t *data_rate);

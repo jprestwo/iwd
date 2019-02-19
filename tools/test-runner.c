@@ -946,6 +946,13 @@ static pid_t start_hostapd(char **config_files, struct wiphy **wiphys)
 	char *ifnames;
 	int i;
 
+	l_debug("Setting reg info\n");
+
+	//if (system("iw --debug reg set US"))
+	//	l_debug("bad iw call");
+	//if (system("iw reg get"))
+	//	l_debug("bad iw reg get call");
+
 	for (i = 0, ifnames_size = 0; wiphys[i]; i++)
 		ifnames_size += 1 + strlen(wiphys[i]->interface_name);
 
@@ -1910,6 +1917,16 @@ static void create_network_and_run_tests(const void *key, void *value,
 
 	if (!create_tmpfs_extra_stuff(tmpfs_extra_stuff))
 		goto remove_abs_paths;
+
+	if (system("cat /etc/default/crda"))
+		l_debug("bad");
+	if (system("ls /lib/firmware"))
+		l_debug("bad ls");
+
+	if (system("iw --debug reg set US"))
+		l_debug("Could not set reg US");
+	if (system("iw --debug reg get"))
+		l_debug("Could not get reg");
 
 	if (!configure_hw_radios(hw_settings, wiphy_list))
 		goto remove_abs_paths;

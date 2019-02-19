@@ -811,11 +811,14 @@ static bool scan_parse_bss_information_elements(struct scan_bss *bss,
 			break;
 		case IE_TYPE_SUPPORTED_RATES:
 		case IE_TYPE_EXTENDED_SUPPORTED_RATES:
-			if (ie_parse_supported_rates(&iter,
-						&bss->supported_rates) < 0)
-				l_warn("Unable to parse [Extended] "
-					"Supported Rates IE for "
-					MAC, MAC_STR(bss->addr));
+			if (iter.len > 255)
+				return false;
+
+			l_debug("COPYING SUPPORTED RATES, len=%u\n", iter.len);
+
+			bss->supported_rates_ie = l_memdup(iter.data - 2,
+								iter.len + 2);
+
 			break;
 		case IE_TYPE_RSN:
 			if (!bss->rsne)
@@ -868,7 +871,19 @@ static bool scan_parse_bss_information_elements(struct scan_bss *bss,
 				return false;
 
 			bss->ht_capable = true;
-			memcpy(bss->ht, iter.data, 26);
+			memcpy(bss->ht_ie, iter.data - 2, iter.len + 2);
+
+			l_debug("COPYING HT CAP\n");
+
+			break;
+		case IE_TYPE_VHT_CAPABILITIES:
+			if (iter.len < 12)
+				return false;
+
+			bss->vht_capable = true;
+			memcpy(bss->vht_ie, iter.data - 2, iter.len + 2);
+
+			l_debug("COPYING VHT CAP");
 
 			break;
 		}
@@ -921,16 +936,15 @@ static struct scan_bss *scan_parse_attr_bss(struct l_genl_attr *attr)
 								&bss->wsc_size);
 
 			break;
+		case NL80211_BSS_CHAN_WIDTH:
+			if (len != sizeof(uint32_t))
+				goto fail;
+
+			bss->chan_width = *((uint32_t *)data);
+
+			l_debug("CHAN WIDTH: %u\n", bss->chan_width);
 		}
 	}
-
-	/*
-	 * Computing data rate requires both the HT IE and the signal strength,
-	 * so this must be done after we know both have been parsed.
-	 */
-	if (bss->ht_capable)
-		ht_calculate_data_rate(bss->ht, bss->signal_strength / 100,
-						&bss->data_rate);
 
 	return bss;
 
@@ -1059,29 +1073,79 @@ static void scan_bss_compute_rank(struct scan_bss *bss)
 	else if (bss->utilization <= 63)
 		rank *= RANK_LOW_UTILIZATION_FACTOR;
 
-	if (bss->supported_rates) {
-		uint8_t max = l_uintset_find_max(bss->supported_rates);
+	if (bss->supported_rates_ie) {
+		uint8_t data_rate;
+
+		l_debug("Parsing supported rates\n");
+
+		if (ie_parse_supported_rates_from_data(bss->supported_rates_ie,
+					bss->supported_rates_ie[1] + 2,
+					bss->signal_strength / 100,
+					bss->chan_width, &data_rate) == 0) {
+			double factor = RANK_MAX_SUPPORTED_RATE_FACTOR -
+					RANK_MIN_SUPPORTED_RATE_FACTOR;
+
+			l_debug("Max supported rate: %u\n", data_rate);
+
+			/*
+			* Maximum rate is 54 Mbps, see DATA_RATE in 802.11-2012,
+			* Section 6.5.5.2
+			*/
+			factor = factor * data_rate / 108 +
+						RANK_MIN_SUPPORTED_RATE_FACTOR;
+			rank *= factor;
+		} else
+			rank *= RANK_MIN_SUPPORTED_RATE_FACTOR;
+	}
+
+	if (bss->ht_capable) {
+		uint64_t data_rate;
 		double factor = RANK_MAX_SUPPORTED_RATE_FACTOR -
 					RANK_MIN_SUPPORTED_RATE_FACTOR;
 
-		/*
-		 * Maximum rate is 54 Mbps, see DATA_RATE in 802.11-2012,
-		 * Section 6.5.5.2
-		 */
-		factor = factor * max / 108 + RANK_MIN_SUPPORTED_RATE_FACTOR;
-		rank *= factor;
+		l_debug("Parsing HT\n");
+
+		if (ie_parse_ht_capability_from_data(bss->ht_ie,
+						bss->ht_ie[1] + 2,
+						bss->signal_strength / 100,
+						&data_rate) == 0) {
+			l_debug("Max HT rate: %lu", data_rate);
+
+			data_rate /= 1000000;
+
+			/*
+			* Maximum HT rate is 600 Mbps
+			*/
+			factor = factor * data_rate / 600 +
+							RANK_MIN_SUPPORTED_RATE_FACTOR;
+			rank *= factor;
+		} else
+			rank *= RANK_MIN_SUPPORTED_RATE_FACTOR;
 	}
 
-	if (bss->ht_capable && bss->data_rate) {
-		double factor = (double)bss->data_rate / 1000000; /* Mbps */
+	if (bss->vht_capable) {
+		uint64_t data_rate;
+		double factor = RANK_MAX_SUPPORTED_RATE_FACTOR -
+					RANK_MIN_SUPPORTED_RATE_FACTOR;
 
-		/*
-		 * TODO: This will HEAVILY rank high throughput APs, since this
-		 * factor could be as high as 600. We may need a better way
-		 * to rank this where we scale the higher throughputs down so
-		 * they dont completely throw off the ranking.
-		 */
-		rank *= factor;
+		l_debug("Parsing VHT\n");
+
+		if (ie_parse_vht_capability_from_data(bss->vht_ie,
+						bss->vht_ie[1] + 2,
+						bss->signal_strength / 100,
+						&data_rate) == 0) {
+			l_debug("Max VHT rate: %lu", data_rate);
+
+			data_rate /= 1000000;
+
+			/*
+			* Maximum HT rate is 600 Mbps
+			*/
+			factor = factor * data_rate / 600 +
+							RANK_MIN_SUPPORTED_RATE_FACTOR;
+			rank *= factor;
+		} else
+			rank *= RANK_MIN_SUPPORTED_RATE_FACTOR;
 	}
 
 	irank = rank;
@@ -1094,7 +1158,7 @@ static void scan_bss_compute_rank(struct scan_bss *bss)
 
 void scan_bss_free(struct scan_bss *bss)
 {
-	l_uintset_free(bss->supported_rates);
+	l_free(bss->supported_rates_ie);
 	l_free(bss->rsne);
 	l_free(bss->wpa);
 	l_free(bss->wsc);
