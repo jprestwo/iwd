@@ -44,6 +44,7 @@
 #include <sys/reboot.h>
 #include <sys/time.h>
 #include <glob.h>
+#include <libgen.h>
 #include <ell/ell.h>
 
 #ifndef WAIT_ANY
@@ -76,6 +77,7 @@ static bool valgrind;
 static char *gdb_opt;
 static bool enable_debug;
 const char *debug_filter;
+static char *monitor_file;
 static const char *qemu_binary;
 static const char *kernel_image;
 static const char *exec_home;
@@ -305,7 +307,7 @@ static char *const qemu_argv[] = {
 	"-no-acpi",
 	"-no-hpet",
 	"-no-reboot",
-	"-fsdev", "local,id=fsdev-root,path=/,readonly,security_model=none",
+	"-fsdev", "local,id=fsdev-root,path=/,security_model=none",
 	"-device", "virtio-9p-pci,fsdev=fsdev-root,mount_tag=/dev/root",
 	"-chardev", "stdio,id=chardev-serial0,signal=off",
 	"-device", "pci-serial,chardev=chardev-serial0",
@@ -374,12 +376,12 @@ static void start_qemu(void)
 			"rootfstype=9p "
 			"root=/dev/root "
 			"rootflags=trans=virtio,version=9p2000.u "
-			"acpi=off pci=noacpi noapic %s ro "
+			"acpi=off pci=noacpi noapic %s rw "
 			"mac80211_hwsim.radios=0 init=%s TESTHOME=%s "
 			"TESTVERBOUT=\'%s\' DEBUG_FILTER=\'%s\'"
 			"TEST_ACTION=%u TEST_ACTION_PARAMS=\'%s\' "
 			"TESTARGS=\'%s\' PATH=\'%s\' VALGRIND=%u"
-			"GDB=\'%s\'",
+			"GDB=\'%s\' MONITOR=\'%s\'",
 			check_verbosity("kernel") ? "ignore_loglevel" : "quiet",
 			initcmd, cwd, verbose_opt ? verbose_opt : "none",
 			enable_debug ? debug_filter : "",
@@ -388,7 +390,8 @@ static void start_qemu(void)
 			testargs,
 			getenv("PATH"),
 			valgrind,
-			gdb_opt ? gdb_opt : "none");
+			gdb_opt ? gdb_opt : "none",
+			monitor_file ? monitor_file : "none");
 
 	argv = alloca(sizeof(qemu_argv) + sizeof(char *) * 7);
 	memcpy(argv, qemu_argv, sizeof(qemu_argv));
@@ -808,6 +811,126 @@ static pid_t start_ofono(void)
 }
 
 static void stop_ofono(pid_t pid)
+{
+	kill_process(pid);
+}
+
+static pid_t execute_monitor(char *argv[])
+{
+	pid_t child_pid;
+	char *str;
+
+	if (!argv[0])
+		return -1;
+
+	str = l_strjoinv(argv, ' ');
+	l_debug("Executing: %s", str);
+	l_free(str);
+
+	child_pid = fork();
+	if (child_pid < 0) {
+		l_error("Failed to fork new process");
+		return -1;
+	}
+
+	if (child_pid == 0) {
+		int fd;
+		char *tmp_path;
+		char *log_name = basename(monitor_file);
+
+		tmp_path = l_strdup_printf("%s/%s", "/tmp", log_name);
+
+		fd = open(tmp_path, O_WRONLY | O_TRUNC);
+
+		if (fd < 0) {
+			l_error("Could not open %s, %s\n", tmp_path,
+					strerror(errno));
+			return -1;
+		}
+
+		l_free(tmp_path);
+
+		dup2(fd, 1);
+		dup2(fd, 2);
+		close(fd);
+
+		execvp(argv[0], argv);
+
+		l_error("Failed to call execvp for: %s. Error: %s", argv[0],
+							strerror(errno));
+
+		exit(EXIT_FAILURE);
+	}
+
+	l_info("Monitor starting, logging to %s", monitor_file);
+
+	return child_pid;
+}
+
+static char* setup_monitor_log(char* logfile)
+{
+	int fd;
+	char* full = realpath(optarg, NULL);
+
+	if (full)
+		return full;
+
+	l_debug("%s not found, it will be created", optarg);
+
+	fd = open(logfile, O_RDWR | O_CREAT, 0666);
+	close(fd);
+
+	return realpath(logfile, NULL);
+}
+
+static bool setup_monitor_links(const char *logfile)
+{
+	char *link_dir;
+	char *target_dir;
+
+	target_dir = realpath(logfile, NULL);
+
+	if (!path_exist(target_dir)) {
+		l_error("No such directory: %s", target_dir);
+		l_free(target_dir);
+		return false;
+	}
+
+	link_dir = l_strdup_printf("%s%s", "/tmp",
+				rindex(target_dir, '/'));
+
+	if (symlink(target_dir, link_dir) < 0) {
+		l_error("Failed to create symlink %s for %s: %s",
+				link_dir, target_dir, strerror(errno));
+
+		l_free(target_dir);
+		l_free(link_dir);
+		return false;
+	}
+
+	l_free(target_dir);
+	l_free(link_dir);
+
+	return true;
+}
+
+static pid_t start_monitor(void)
+{
+	char *argv[5];
+
+	argv[0] = "iwmon";
+	argv[1] = "--nortnl";
+	argv[2] = "--nowiphy";
+	argv[3] = "--noscan";
+	argv[4] = NULL;
+
+	if (!setup_monitor_links(monitor_file))
+		return -1;
+
+	return execute_monitor(argv);
+}
+
+static void stop_monitor(pid_t pid)
 {
 	kill_process(pid);
 }
@@ -1720,6 +1843,7 @@ static void create_network_and_run_tests(const void *key, void *value,
 	pid_t medium_pid = -1;
 	pid_t ofono_pid = -1;
 	pid_t phonesim_pid = -1;
+	pid_t monitor_pid = -1;
 	char *config_dir_path;
 	char *iwd_config_dir;
 	char **tmpfs_extra_stuff = NULL;
@@ -1732,6 +1856,7 @@ static void create_network_and_run_tests(const void *key, void *value,
 	const char *sim_keys;
 	const char *iwd_ext_options = NULL;
 	const char *reg_domain;
+	int use_monitor = strcmp(monitor_file, "none");
 
 	memset(hostapd_pids, -1, sizeof(hostapd_pids));
 
@@ -1852,6 +1977,9 @@ static void create_network_and_run_tests(const void *key, void *value,
 		ofono_pid = start_ofono();
 	}
 
+	if (use_monitor)
+		monitor_pid = start_monitor();
+
 	set_wiphy_list(wiphy_list);
 
 	run_py_tests(hw_settings, test_queue, test_stats_queue);
@@ -1871,6 +1999,9 @@ static void create_network_and_run_tests(const void *key, void *value,
 		stop_ofono(ofono_pid);
 		stop_phonesim(phonesim_pid);
 	}
+
+	if (use_monitor)
+		stop_monitor(monitor_pid);
 
 exit_hostapd:
 	destroy_hostapd_instances(hostapd_pids);
@@ -2076,6 +2207,7 @@ static void run_auto_tests(void)
 	l_queue_destroy(test_stat_queue, test_stat_queue_entry_destroy);
 
 exit:
+	l_free(monitor_file);
 	l_strfreev(verbose_apps);
 	l_strfreev(test_config_dirs);
 	l_hashmap_destroy(test_config_map, NULL);
@@ -2131,6 +2263,18 @@ static void run_tests(void)
 	if (!ptr) {
 		l_error("Failed to read kernel command line");
 		return;
+	}
+
+	ptr = strstr(cmdline, "MONITOR=");
+
+	if (ptr) {
+		test_action_str = ptr + 9;
+
+		ptr = strchr(test_action_str, '\'');
+
+		*ptr = '\0';
+
+		monitor_file = l_strdup(test_action_str);
 	}
 
 	ptr = strstr(cmdline, "GDB=");
@@ -2305,7 +2449,9 @@ static void usage(void)
 						"\t\t\t\tto see valgrind"
 						" output\n"
 		"\t-g, --gdb <iwd|hostapd>	Run gdb on the specified"
-						" executable");
+						" executable\n"
+		"\t-m, --monitor <file>	Run iwmon and pipe output to "
+						"<file>\n");
 	l_info("Commands:\n"
 		"\t-A, --auto-tests <dirs>	Comma separated list of the "
 						"test configuration\n\t\t\t\t"
@@ -2323,6 +2469,7 @@ static const struct option main_options[] = {
 	{ "debug",	optional_argument, NULL, 'd' },
 	{ "gdb",	required_argument, NULL, 'g' },
 	{ "valgrind",	no_argument,       NULL, 'V' },
+	{ "monitor",	required_argument, NULL, 'm' },
 	{ "help",	no_argument,       NULL, 'h' },
 	{ }
 };
@@ -2348,7 +2495,7 @@ int main(int argc, char *argv[])
 	for (;;) {
 		int opt;
 
-		opt = getopt_long(argc, argv, "A:U:q:k:v:g:Vdh", main_options,
+		opt = getopt_long(argc, argv, "A:U:q:k:v:g:m:Vdh", main_options,
 									NULL);
 		if (opt < 0)
 			break;
@@ -2396,6 +2543,9 @@ int main(int argc, char *argv[])
 					", hwsim or hostapd");
 				return EXIT_FAILURE;
 			}
+			break;
+		case 'm':
+			monitor_file = setup_monitor_log(optarg);
 			break;
 		case 'h':
 			usage();
