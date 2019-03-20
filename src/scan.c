@@ -758,6 +758,7 @@ static bool scan_parse_bss_information_elements(struct scan_bss *bss,
 {
 	struct ie_tlv_iter iter;
 	bool have_ssid = false;
+	unsigned int i;
 
 	ie_tlv_iter_init(&iter, data, len);
 
@@ -846,6 +847,19 @@ static bool scan_parse_bss_information_elements(struct scan_bss *bss,
 			bss->vht_capable = true;
 			memcpy(bss->vht_ie, iter.data - 2, iter.len + 2);
 
+			break;
+		case IE_TYPE_EXTENDED_CAPABILITIES:
+			l_debug("Ex Capabilities len %u\n", iter.len);
+
+			for (i = 0; i < iter.len; i++) {
+				const uint8_t *p = iter.data;
+				int j;
+				for (j = 0; j < 8; j++) {
+					if (util_is_bit_set(p[i], j)) {
+						l_debug("Bit %u is set", i * j);
+					}
+				}
+			}
 			break;
 		}
 	}
