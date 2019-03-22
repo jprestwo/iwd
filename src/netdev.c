@@ -59,6 +59,7 @@
 #include "src/sae.h"
 #include "src/nl80211util.h"
 #include "src/owe.h"
+#include "src/fils.h"
 
 #ifndef ENOTSUPP
 #define ENOTSUPP 524
@@ -96,6 +97,7 @@ struct netdev {
 	struct eapol_sm *sm;
 	struct sae_sm *sae_sm;
 	struct owe_sm *owe;
+	struct fils_sm *fils;
 	struct handshake_state *handshake;
 	uint32_t connect_cmd_id;
 	uint32_t disconnect_cmd_id;
@@ -557,6 +559,11 @@ static void netdev_connect_free(struct netdev *netdev)
 	if (netdev->owe) {
 		owe_sm_free(netdev->owe);
 		netdev->owe = NULL;
+	}
+
+	if (netdev->fils) {
+		fils_sm_free(netdev->fils);
+		netdev->fils = NULL;
 	}
 
 	eapol_preauth_cancel(netdev->index);
@@ -2322,7 +2329,7 @@ static void netdev_authenticate_event(struct l_genl_msg *msg,
 	 * the FT Associate command is included in the attached frame and is
 	 * not available in the Authenticate command callback.
 	 */
-	if (!netdev->in_ft && !netdev->sae_sm && !netdev->owe)
+	if (!netdev->in_ft && !netdev->sae_sm && !netdev->owe && !netdev->fils)
 		return;
 
 	if (!l_genl_attr_init(&attr, msg)) {
@@ -2364,6 +2371,8 @@ static void netdev_authenticate_event(struct l_genl_msg *msg,
 				frame + 26, frame_len - 26);
 	else if (netdev->owe)
 		owe_rx_authenticate(netdev->owe);
+	else if (netdev->fils)
+		fils_rx_authenticate(netdev->fils, frame, frame_len);
 	else
 		goto auth_error;
 
@@ -2389,7 +2398,8 @@ static void netdev_associate_event(struct l_genl_msg *msg,
 	if (netdev->aborting)
 		return;
 
-	if (!netdev->owe && !netdev->in_ft && !netdev->handshake->mde)
+	if (!netdev->owe && !netdev->in_ft && !netdev->handshake->mde &&
+				!netdev->fils)
 		return;
 
 	if (!l_genl_attr_init(&attr, msg)) {
@@ -2416,6 +2426,9 @@ static void netdev_associate_event(struct l_genl_msg *msg,
 
 	if (netdev->owe) {
 		owe_rx_associate(netdev->owe, frame, frame_len);
+		return;
+	} else if (netdev->fils) {
+		fils_rx_associate(netdev->fils, frame, frame_len);
 		return;
 	}
 
@@ -2683,6 +2696,82 @@ static void netdev_owe_complete(uint16_t status, void *user_data)
 	eapol_start(netdev->sm);
 }
 
+static void netdev_fils_tx_authenticate(const uint8_t *body,
+					size_t body_len,
+					void *user_data)
+{
+	struct netdev *netdev = user_data;
+	struct l_genl_msg *msg;
+
+	msg = netdev_build_cmd_authenticate(netdev, NL80211_AUTHTYPE_FILS_SK,
+						netdev->handshake->aa);
+
+	l_genl_msg_append_attr(msg, NL80211_ATTR_AUTH_DATA, body_len, body);
+
+	if (!l_genl_family_send(nl80211, msg, netdev_owe_auth_cb,
+							netdev, NULL)) {
+		l_genl_msg_unref(msg);
+		netdev_connect_failed(netdev,
+					NETDEV_RESULT_AUTHENTICATION_FAILED,
+					MMPDU_STATUS_CODE_UNSPECIFIED);
+	}
+}
+
+static void netdev_fils_assoc_cb(struct l_genl_msg *msg, void *user_data)
+{
+	struct netdev *netdev = user_data;
+
+	if (l_genl_msg_get_error(msg) < 0) {
+		l_error("Error sending CMD_ASSOCIATE");
+
+		netdev_connect_failed(netdev, NETDEV_RESULT_ASSOCIATION_FAILED,
+					MMPDU_STATUS_CODE_UNSPECIFIED);
+	}
+}
+
+static void netdev_fils_tx_associate(struct iovec *ie_iov, size_t iov_len,
+					const uint8_t *kek, size_t kek_len,
+					const uint8_t *nonces, size_t nonces_len,
+					void *user_data)
+{
+	struct netdev *netdev = user_data;
+	struct l_genl_msg *msg;
+
+	msg = netdev_build_cmd_associate_common(netdev);
+
+	l_genl_msg_append_attrv(msg, NL80211_ATTR_IE, ie_iov, iov_len);
+
+	l_genl_msg_append_attr(msg, NL80211_ATTR_FILS_KEK, kek_len, kek);
+	l_genl_msg_append_attr(msg, NL80211_ATTR_FILS_NONCES, nonces_len, nonces);
+
+	if (!l_genl_family_send(nl80211, msg, netdev_fils_assoc_cb,
+							netdev, NULL)) {
+		l_genl_msg_unref(msg);
+		netdev_connect_failed(netdev, NETDEV_RESULT_ASSOCIATION_FAILED,
+					MMPDU_STATUS_CODE_UNSPECIFIED);
+	}
+
+	netdev->ignore_connect_event = true;
+}
+
+static void netdev_fils_complete(uint16_t status, bool in_auth, void *user_data)
+{
+	struct netdev *netdev = user_data;
+	/*
+	 * FILS takes care of setting keys. Only error cases need to be handled
+	 * here.
+	 */
+	if (status == 0)
+		return;
+
+	l_debug("FILS failed with status %u", status);
+
+	netdev_connect_failed(netdev, in_auth ?
+				NETDEV_RESULT_AUTHENTICATION_FAILED :
+				NETDEV_RESULT_ASSOCIATION_FAILED,
+				status);
+}
+
 static struct l_genl_msg *netdev_build_cmd_connect(struct netdev *netdev,
 						struct scan_bss *bss,
 						struct handshake_state *hs,
@@ -2817,6 +2906,8 @@ static int netdev_connect_common(struct netdev *netdev,
 		sae_start(netdev->sae_sm);
 	else if (netdev->owe)
 		owe_start(netdev->owe);
+	else if (netdev->fils)
+		fils_start(netdev->fils);
 
 	return 0;
 }
@@ -2847,6 +2938,12 @@ int netdev_connect(struct netdev *netdev, struct scan_bss *bss,
 						netdev_owe_tx_associate,
 						netdev_owe_complete,
 						netdev);
+		break;
+	case IE_RSN_AKM_SUITE_FILS_SHA256:
+	case IE_RSN_AKM_SUITE_FILS_SHA384:
+		netdev->fils = fils_sm_new(hs, netdev_fils_tx_authenticate,
+						netdev_fils_tx_associate,
+						netdev_fils_complete, netdev);
 		break;
 	default:
 		cmd_connect = netdev_build_cmd_connect(netdev, bss, hs, NULL);
