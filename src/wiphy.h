@@ -39,7 +39,8 @@ typedef void (*wiphy_destroy_func_t)(void *user_data);
 enum ie_rsn_cipher_suite wiphy_select_cipher(struct wiphy *wiphy,
 							uint16_t mask);
 enum ie_rsn_akm_suite wiphy_select_akm(struct wiphy *wiphy,
-					struct scan_bss *bss);
+					struct scan_bss *bss,
+					bool has_cached_keys);
 
 struct wiphy *wiphy_find(int wiphy_id);
 
