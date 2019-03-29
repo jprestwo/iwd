@@ -1,6 +1,6 @@
 [Security]
 EAP-Method=PWD
-EAP-Identity=eap-pwd-identity
+EAP-Identity=user@example.com
 EAP-Password=secret123
 
 [Settings]

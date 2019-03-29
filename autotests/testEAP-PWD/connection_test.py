@@ -26,7 +26,7 @@ class Test(unittest.TestCase):
 
         self.assertIsNotNone(hostapd)
 
-        psk_agent = PSKAgent('eap-pwd-identity', ('eap-pwd-identity',
+        psk_agent = PSKAgent('user@example.com', ('user@example.com',
                                                                   'secret123'))
         wd.register_psk_agent(psk_agent)
 
