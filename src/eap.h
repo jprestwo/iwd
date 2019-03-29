@@ -63,6 +63,8 @@ typedef void (*eap_complete_func_t)(enum eap_result result, void *user_data);
 typedef void (*eap_event_func_t)(unsigned int event, const void *event_data,
 							void *user_data);
 
+bool eap_send_initiate_reauth(struct eap_state *eap);
+
 bool eap_secret_info_match(const void *a, const void *b);
 void eap_secret_info_free(void *data);
 
@@ -79,11 +81,15 @@ int eap_check_settings(struct l_settings *settings, struct l_queue *secrets,
 			struct l_queue **out_missing);
 bool eap_load_settings(struct eap_state *eap, struct l_settings *settings,
 			const char *prefix);
+bool eap_has_cached_keys(struct l_settings *settings);
+
 bool eap_reset(struct eap_state *eap);
 
 void eap_set_key_material_func(struct eap_state *eap,
 				eap_key_material_func_t func);
 void eap_set_event_func(struct eap_state *eap, eap_event_func_t func);
+
+void eap_set_erp_allowed(struct eap_state *eap, bool erp_allowed);
 
 void eap_set_mtu(struct eap_state *eap, size_t mtu);
 size_t eap_get_mtu(struct eap_state *eap);

@@ -421,6 +421,7 @@ unit_test_wsc_LDADD = $(ell_ldadd)
 
 unit_test_eap_mschapv2_SOURCES = src/eap-mschapv2.h src/eap-mschapv2.c \
 				src/eap.c src/eap.h src/eap-private.h \
+				src/crypto.h src/crypto.c \
 				src/mschaputil.h src/mschaputil.c \
 				src/util.h src/util.c \
 				unit/test-eap-mschapv2.c
