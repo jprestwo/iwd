@@ -1,0 +1,7 @@
+[Security]
+EAP-Method=PWD
+EAP-Identity=user@example.com
+#EAP-ERP-Domain=example.com
+
+[Settings]
+Autoconnect=false
