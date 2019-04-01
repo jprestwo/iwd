@@ -98,6 +98,8 @@ struct eap_aka_handle {
 	/* re-auth key */
 	uint8_t k_re[EAP_AKA_K_RE_LEN];
 
+	uint8_t rand[EAP_SIM_RAND_LEN];
+
 	char *kdf_in;
 
 	uint8_t *chal_pkt;
@@ -131,6 +133,13 @@ static void eap_aka_free(struct eap_state *eap)
 	l_free(aka);
 
 	eap_set_data(eap, NULL);
+}
+
+static void derive_session_id(struct eap_aka_handle *aka, uint8_t *session_id)
+{
+	session_id[0] = EAP_TYPE_AKA;
+	memcpy(session_id + 1, aka->rand, EAP_SIM_RAND_LEN);
+	memcpy(session_id + 1 + EAP_SIM_RAND_LEN, aka->autn, EAP_AKA_AUTN_LEN);
 }
 
 static bool derive_aka_mk(const char *identity, const uint8_t *ik,
@@ -272,9 +281,14 @@ static void check_milenage_cb(const uint8_t *res, const uint8_t *ck,
 	eap_send_response(eap, aka->type, response, resp_len);
 
 	if (!aka->protected) {
+		uint8_t session_id[1 + EAP_SIM_RAND_LEN + EAP_AKA_AUTN_LEN];
+
 		eap_method_success(eap);
+
+		derive_session_id(aka, session_id);
+
 		eap_set_key_material(eap, aka->msk, 32, NULL, 0, NULL, 0,
-					NULL, 0);
+					session_id, sizeof(session_id));
 
 		aka->state = EAP_AKA_STATE_SUCCESS;
 	}
@@ -434,6 +448,8 @@ static void handle_challenge(struct eap_state *eap, const uint8_t *pkt,
 
 	/* AKA' needs AUTN for prime derivation */
 	memcpy(aka->autn, autn, EAP_AKA_AUTN_LEN);
+	/* Keep RAND for session ID derivation */
+	memcpy(aka->rand, rand, EAP_SIM_RAND_LEN);
 
 	if (sim_auth_check_milenage(aka->auth, rand, autn, check_milenage_cb,
 			eap) < 0) {
@@ -498,13 +514,16 @@ static void handle_notification(struct eap_state *eap, const uint8_t *pkt,
 		/* header + MAC + MAC header */
 		uint8_t response[8 + EAP_SIM_MAC_LEN + 4];
 		uint8_t *pos = response;
+		uint8_t session_id[1 + EAP_SIM_RAND_LEN + EAP_AKA_AUTN_LEN];
 
 		/*
 		 * Server sent successful result indication
 		 */
 		eap_method_success(eap);
+
+		derive_session_id(aka, session_id);
 		eap_set_key_material(eap, aka->msk, 32, NULL, 0, NULL, 0,
-					NULL, 0);
+					session_id, sizeof(session_id));
 
 		/*
 		 * Build response packet
