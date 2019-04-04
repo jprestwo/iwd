@@ -49,6 +49,7 @@
 #include "src/station.h"
 #include "src/blacklist.h"
 #include "src/mpdu.h"
+#include "src/eap.h"
 
 static struct l_queue *station_list;
 static uint32_t netdev_watch;
@@ -451,6 +452,7 @@ static int station_build_handshake_rsn(struct handshake_state *hs,
 {
 	enum security security = network_get_security(network);
 	bool add_mde = false;
+	bool has_cached_keys = false;
 
 	const struct l_settings *settings = iwd_get_config();
 	struct ie_rsn_info bss_info;
@@ -463,7 +465,15 @@ static int station_build_handshake_rsn(struct handshake_state *hs,
 	memset(&bss_info, 0, sizeof(bss_info));
 	scan_bss_get_rsn_info(bss, &bss_info);
 
-	info.akm_suites = wiphy_select_akm(wiphy, bss, false);
+	/*
+	 * If this network 8021x we might have a set of cached EAP keys. If so
+	 * wiphy may select FILS if supported by the AP.
+	 */
+	if (security == SECURITY_8021X)
+		has_cached_keys = eap_has_cached_keys(
+						network_get_settings(network));
+
+	info.akm_suites = wiphy_select_akm(wiphy, bss, has_cached_keys);
 
 	/*
 	 * Special case for OWE. With OWE we still need to build up the
