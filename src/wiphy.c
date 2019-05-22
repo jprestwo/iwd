@@ -115,6 +115,10 @@ enum ie_rsn_akm_suite wiphy_select_akm(struct wiphy *wiphy,
 	 * for fast transitions.  Otherwise use SHA256 version if present.
 	 */
 	if (security == SECURITY_8021X) {
+		if (bss->anqp_capable &&
+				(info.akm_suites & IE_RSN_AKM_SUITE_OSEN))
+			return IE_RSN_AKM_SUITE_OSEN;
+
 		if (wiphy_has_feature(wiphy, NL80211_EXT_FEATURE_FILS_STA) &&
 				fils_capable_hint) {
 			if ((info.akm_suites &
