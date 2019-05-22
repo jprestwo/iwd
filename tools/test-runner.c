@@ -1015,8 +1015,8 @@ static pid_t start_monitor(void)
 	argv[0] = "iwmon";
 	argv[1] = "--nortnl";
 	argv[2] = "--nowiphy";
-	argv[3] = "--noscan";
-	argv[4] = NULL;
+	//argv[3] = "--noscan";
+	argv[3] = NULL;
 
 	if (!setup_monitor_links(monitor_file))
 		return -1;
@@ -1070,7 +1070,7 @@ static pid_t start_hostapd(char **config_files, struct wiphy **wiphys)
 	}
 
 	if (verbose) {
-		argv[idx++] = "-d";
+		argv[idx++] = "-ddK";
 		argv[idx++] = NULL;
 	} else {
 		argv[idx++] = NULL;
