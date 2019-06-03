@@ -45,9 +45,12 @@
 #include "src/wiphy.h"
 #include "src/station.h"
 #include "src/eap.h"
+#include "src/eap-private.h"
 #include "src/knownnetworks.h"
 #include "src/network.h"
 #include "src/blacklist.h"
+#include "src/anqp.h"
+#include "src/util.h"
 
 struct network {
 	char *object_path;
@@ -1050,6 +1053,239 @@ err:
 	network_settings_close(network);
 }
 
+struct network_anqp_data {
+	struct network *network;
+	uint8_t addr[6]; /* save address, scan_bss may have gone away */
+	struct l_dbus_message *message;
+};
+
+static struct network_anqp_data *network_anqp_data_new(
+					struct network *network,
+					struct scan_bss *bss,
+					struct l_dbus_message *message)
+{
+	struct network_anqp_data *req = l_new(struct network_anqp_data, 1);
+
+	req->network = network;
+	req->message = message;
+	memcpy(req->addr, bss->addr, 6);
+
+	return req;
+}
+
+static bool network_setup_wfa_tls(struct network *network, const char *nai)
+{
+	if (!nai)
+		return false;
+
+	network->settings = l_settings_new();
+
+	l_settings_set_string(network->settings, "Security",
+				"EAP-Method", "WFA-TLS");
+	l_settings_set_string(network->settings, "Security",
+				"EAP-Identity", nai);
+
+	return true;
+}
+
+static bool network_setup_hs20_eap(struct network *network,
+				struct anqp_eap_method *method)
+{
+	char *identity;
+
+	network->settings = l_settings_new();
+
+	switch (method->method) {
+	case EAP_TYPE_TTLS:
+		l_settings_set_string(network->settings, "Security",
+				"EAP-Method", "TTLS");
+		identity = l_strdup_printf("anonymous@%s", method->realm);
+		l_settings_set_string(network->settings, "Security",
+				"EAP-Identity", identity);
+		l_free(identity);
+
+		if (method->non_eap_inner) {
+			const char *inner_method = NULL;
+
+			switch (method->non_eap_inner) {
+			case 2: /* CHAP */
+				inner_method = "Tunneled-CHAP";
+				break;
+			case 3: /* MSCHAP */
+				inner_method = "Tunneled-MSCHAP";
+				break;
+			case 4: /* MSCHAPv2 */
+				inner_method = "Tunneled-MSCHAPv2";
+				break;
+			default:
+				l_error("Non-EAP inner type %u unsupported",
+						method->non_eap_inner);
+				return false;
+			}
+
+			l_settings_set_string(network->settings, "Security",
+						"EAP-TTLS-Phase2-Method",
+						inner_method);
+
+			l_debug("Selecting TTLS + (non-EAP) %s", inner_method);
+		} else
+			return false;
+
+		return true;
+	default:
+		return false;
+	}
+}
+
+static void network_anqp_response_cb(struct netdev *netdev,
+					enum netdev_anqp_result result,
+					const void *anqp, size_t len,
+					void *user_data)
+{
+	struct network_anqp_data *anqp_data = user_data;
+	struct network *network = anqp_data->network;
+	struct anqp_iter iter;
+	const char *nai = NULL;
+	struct scan_bss *bss;
+	struct anqp_eap_method method;
+	struct l_dbus_message *error;
+
+	if (result == NETDEV_ANQP_FAILED)
+		goto not_configured;
+	else if (result == NETDEV_ANQP_TIMEOUT) {
+		/*
+		 * Either the AP is actually broken, or we may have gone out of
+		 * range and the request/response was never received. All we
+		 * can do is see if that BSS is still in the scan list. If so,
+		 * this likely means the AP is broken so we blacklist and move
+		 * onto the next.
+		 */
+		bss = network_bss_find_by_addr(network, anqp_data->addr);
+		if (bss)
+			network_blacklist_add(network, bss);
+
+		bss = network_bss_select(network, false);
+		if (!bss)
+			goto not_configured;
+
+		l_debug("Attempting to connect to next BSS "MAC,
+				MAC_STR(bss->addr));
+
+		goto connect;
+	}
+
+	if (!anqp)
+		goto not_configured;
+
+	bss = network_bss_find_by_addr(network, anqp_data->addr);
+	if (!bss)
+		goto not_configured;
+
+	anqp_iter_init(&iter, anqp, len);
+
+	while (anqp_iter_next(&iter)) {
+		uint8_t stype;
+		const unsigned char *vdata;
+		unsigned int vlen;
+
+		switch (iter.id) {
+		case ANQP_NAI_REALM:
+			if (!anqp_parse_nai_realm(iter.data, iter.len,
+						bss->hs20_capable, &method))
+				goto not_configured;
+
+			break;
+		case ANQP_VENDOR_SPECIFIC:
+			if (!anqp_parse_vendor_wfa(iter.data, iter.len, &stype,
+						&vdata, &vlen))
+				continue;
+
+			switch (stype) {
+			case ANQP_HS20_OSU_PROVIDERS_NAI_LIST:
+				if (!anqp_hs20_parse_osu_provider_nai(vdata,
+								vlen, &nai))
+					goto not_configured;
+			}
+
+			break;
+		default:
+			continue;
+		}
+	}
+
+	if (bss->hs20_capable) {
+		if (!network_setup_hs20_eap(network, &method))
+			goto not_configured;
+	} else if (bss->osen && is_ie_wfa_ie(bss->osen + 2, bss->osen[1],
+						IE_WFA_OI_OSEN)) {
+		if (!network_setup_wfa_tls(network, nai))
+			goto not_configured;
+	} else
+		goto not_configured;
+
+connect:
+	error = network_connect_8021x(network, bss, anqp_data->message);
+	if (error)
+		goto send_error;
+
+	l_dbus_message_unref(anqp_data->message);
+	l_free(anqp_data);
+
+	return;
+
+not_configured:
+	error = dbus_error_not_configured(anqp_data->message);
+
+send_error:
+	l_error("GAS request failed to obtain required EAP parameters");
+
+	dbus_pending_reply(&anqp_data->message, error);
+	l_free(anqp_data);
+}
+
+static struct l_dbus_message *network_anqp_request(struct station *station,
+						struct network *network,
+						struct scan_bss *bss,
+						struct l_dbus_message *message)
+{
+	uint8_t anqp[256];
+	uint8_t *ptr = anqp;
+	struct network_anqp_data *data;
+
+	l_put_le16(ANQP_QUERY_LIST, ptr);
+	ptr += 2;
+	l_put_le16(2, ptr);
+	ptr += 2;
+	l_put_le16(ANQP_NAI_REALM, ptr);
+	ptr += 2;
+	l_put_le16(ANQP_VENDOR_SPECIFIC, ptr);
+	ptr += 2;
+	/* vendor length */
+	l_put_le16(7, ptr);
+	ptr += 2;
+	*ptr++ = 0x50;
+	*ptr++ = 0x6f;
+	*ptr++ = 0x9a;
+	*ptr++ = 0x11; /* HS20 ANQP Element type */
+	*ptr++ = ANQP_HS20_QUERY_LIST;
+	*ptr++ = 0; /* reserved */
+	*ptr++ = ANQP_HS20_OSU_PROVIDERS_NAI_LIST;
+
+	data = network_anqp_data_new(network, bss, l_dbus_message_ref(message));
+
+	if (!netdev_anqp_request(station_get_netdev(station), bss, anqp,
+				ptr - anqp, network_anqp_response_cb, data)) {
+		l_dbus_message_unref(message);
+		l_free(anqp);
+		goto not_configured;
+	}
+
+	return NULL;
+
+not_configured:
+	return dbus_error_not_configured(message);
+}
+
 static struct l_dbus_message *network_connect_8021x(struct network *network,
 						struct scan_bss *bss,
 						struct l_dbus_message *message)
@@ -1060,6 +1296,10 @@ static struct l_dbus_message *network_connect_8021x(struct network *network,
 	struct l_dbus_message *reply;
 
 	l_debug("");
+
+	/* Auto-provision 8021x (only for OSEN/Hotspot) */
+	if (!network->settings && bss->anqp_capable)
+		return network_anqp_request(station, network, bss, message);
 
 	r = eap_check_settings(network->settings, network->secrets, "EAP-",
 				true, &missing_secrets);
@@ -1138,7 +1378,11 @@ static struct l_dbus_message *network_connect(struct l_dbus *dbus,
 		station_connect_network(station, network, bss, message);
 		return NULL;
 	case SECURITY_8021X:
-		if (!network_settings_load(network))
+		/*
+		 * If ANQP is supported we may not need an 8021x file. At the
+		 * moment this is only here to support OSEN/Hotspot 2.0.
+		 */
+		if (!network_settings_load(network) && !bss->anqp_capable)
 			return dbus_error_not_configured(message);
 
 		return network_connect_8021x(network, bss, message);
