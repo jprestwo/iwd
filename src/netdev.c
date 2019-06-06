@@ -2661,13 +2661,20 @@ static uint32_t netdev_send_action_framev(struct netdev *netdev,
 	uint8_t action_frame[24];
 	uint32_t id;
 	uint32_t duration = 300;
+	const uint8_t wildcard[] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
+	const uint8_t *bssid;
+
+	if (!netdev->connected)
+		bssid = wildcard;
+	else
+		bssid = to;
 
 	memset(action_frame, 0, 24);
 
 	l_put_le16(frame_type, action_frame + 0);
 	memcpy(action_frame + 4, to, 6);
 	memcpy(action_frame + 10, netdev->addr, 6);
-	memcpy(action_frame + 16, to, 6);
+	memcpy(action_frame + 16, bssid, 6);
 
 	iovs[0].iov_base = action_frame;
 	iovs[0].iov_len = sizeof(action_frame);
