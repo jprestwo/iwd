@@ -2871,7 +2871,17 @@ bool netdev_anqp_request(struct netdev *netdev, struct scan_bss *bss,
 				netdev_anqp_response_func_t cb,
 				void *user_data)
 {
+	struct wiphy *wiphy = netdev->wiphy;
 	uint8_t frame[512];
+
+	/*
+	 * If this is ever extended and used while associated some logic will
+	 * need to be added here to determine if we need to go off channel.
+	 */
+	if (!wiphy_can_offchannel_tx(wiphy)) {
+		l_error("ANQP failed, driver does not support offchannel TX");
+		return false;
+	}
 
 	netdev->anqp_cb = cb;
 	netdev->anqp_data = user_data;
