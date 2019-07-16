@@ -1877,7 +1877,8 @@ static bool station_cannot_roam(struct station *station)
 		disabled = false;
 
 	return disabled || station->preparing_roam ||
-					station->state == STATION_STATE_ROAMING;
+				station->state == STATION_STATE_ROAMING ||
+				station->state == STATION_STATE_CONNECTING;
 }
 
 static void station_lost_beacon(struct station *station)
