@@ -43,6 +43,8 @@ const char *security_to_str(enum security security)
 		return "psk";
 	case SECURITY_8021X:
 		return "8021x";
+	case SECURITY_HOTSPOT:
+		return "hotspot";
 	}
 
 	return NULL;
@@ -58,6 +60,8 @@ bool security_from_str(const char *str, enum security *security)
 		*security = SECURITY_PSK;
 	else if (!strcmp(str, "8021x"))
 		*security = SECURITY_8021X;
+	else if (!strcmp(str, "hotspot"))
+		*security = SECURITY_HOTSPOT;
 	else
 		return false;
 

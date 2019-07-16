@@ -30,6 +30,7 @@ enum security {
 	SECURITY_WEP,
 	SECURITY_PSK,
 	SECURITY_8021X,
+	SECURITY_HOTSPOT,
 };
 
 const char *security_to_str(enum security security);
