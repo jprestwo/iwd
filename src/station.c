@@ -399,6 +399,14 @@ static void station_bss_list_remove_expired_bsses(struct station *station)
 	l_queue_foreach_remove(station->bss_list, bss_free_if_expired, &data);
 }
 
+static bool match_network(const void *a, const void *b)
+{
+	const struct anqp_entry *entry = a;
+	const struct network *network = b;
+
+	return entry->network == network;
+}
+
 static void station_anqp_response_cb(enum anqp_result result,
 					const void *anqp, size_t anqp_len,
 					void *user_data)
@@ -442,6 +450,9 @@ static void station_anqp_response_cb(enum anqp_result result,
 
 	network_set_nai_realms(network, realms);
 
+	if (station_is_autoconnecting(station))
+		station_autoconnect_next(entry->station);
+
 request_done:
 	l_queue_remove(station->anqp_pending, entry);
 
@@ -472,6 +483,15 @@ static bool station_start_anqp(struct station *station, struct network *network,
 		l_debug("Not querying AP for ANQP data (disabled)");
 		return false;
 	}
+
+	/*
+	 * An ANQP request is already in progress for this network.
+	 *
+	 * TODO: This should really be matching the domain ID
+	 */
+	entry = l_queue_find(station->anqp_pending, match_network, network);
+	if (entry)
+		return true;
 
 	entry = l_new(struct anqp_entry, 1);
 	entry->station = station;
@@ -575,10 +595,8 @@ void station_set_scan_results(struct station *station,
 		if (station_start_anqp(station, network, bss))
 			wait_for_anqp = true;
 
-		if (!add_to_autoconnect)
-			continue;
-
-		station_add_autoconnect_bss(station, network, bss);
+		if (add_to_autoconnect)
+			station_add_autoconnect_bss(station, network, bss);
 	}
 
 	station->bss_list = new_bss_list;
@@ -597,6 +615,8 @@ void station_set_scan_results(struct station *station,
 	 */
 	if (wait_for_anqp)
 		scan_suspend(netdev_get_wdev_id(station->netdev));
+	else if (add_to_autoconnect)
+		station_autoconnect_next(station);
 }
 
 static void station_reconnect(struct station *station);
@@ -914,9 +934,6 @@ static bool new_scan_results(int err, struct l_queue *bss_list, void *userdata)
 
 	autoconnect = station_is_autoconnecting(station);
 	station_set_scan_results(station, bss_list, autoconnect);
-
-	if (autoconnect)
-		station_autoconnect_next(station);
 
 	return true;
 }
