@@ -255,6 +255,12 @@ bool network_rankmod(const struct network *network, double *rankmod)
 	int n;
 	int nmax;
 
+	/* By-pass knownnetworks for now */
+	if (network->is_hs20) {
+		*rankmod = rankmod_table[1];
+		return true;
+	}
+
 	/*
 	 * Current policy is that only networks successfully connected
 	 * to at least once are autoconnectable.  Known Networks that
@@ -616,6 +622,16 @@ int network_autoconnect(struct network *network, struct scan_bss *bss)
 
 	if (!network_settings_load(network))
 		return -ENOKEY;
+
+	if (network->is_hs20) {
+		bool value;
+
+		if (!l_settings_get_bool(network->settings, "Settings",
+					"Autoconnect", &value))
+			value = true;
+
+		network->info->is_autoconnectable = value;
+	}
 
 	ret = -EPERM;
 	if (!network->info->is_autoconnectable)
