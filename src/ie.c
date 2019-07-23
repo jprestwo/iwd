@@ -1287,7 +1287,7 @@ bool is_ie_wfa_ie(const uint8_t *data, uint8_t len, uint8_t oi_type)
 
 	if (oi_type == IE_WFA_OI_OSEN && len < 22)
 		return false;
-	else if (oi_type == IE_WFA_OI_HS20_INDICATION && len < 5)
+	else if (oi_type == IE_WFA_OI_HS20_INDICATION && len != 5 && len != 7)
 		return false;
 	else if (len < 4) /* OI not handled, but at least check length */
 		return false;
@@ -2482,4 +2482,64 @@ int ie_build_roaming_consortium(const uint8_t *rc, size_t rc_len, uint8_t *to)
 	memcpy(to, rc, rc_len);
 
 	return 0;
+}
+
+int ie_parse_hs20_indication(struct ie_tlv_iter *iter, uint8_t *version_out,
+				uint16_t *pps_mo_id_out, uint8_t *domain_id_out)
+{
+	unsigned int len = ie_tlv_iter_get_length(iter);
+	const uint8_t *data = ie_tlv_iter_get_data(iter);
+	uint8_t hs20_config;
+	bool pps_mo_present, domain_id_present;
+
+	if (!is_ie_wfa_ie(data, iter->len, IE_WFA_OI_HS20_INDICATION))
+		return -EPROTOTYPE;
+
+	hs20_config = l_get_u8(data + 4);
+
+	pps_mo_present = util_is_bit_set(hs20_config, 1);
+	domain_id_present = util_is_bit_set(hs20_config, 2);
+
+	/*
+	 * Hotspot 2.0 Spec - Section 3.1.1
+	 *
+	 * "Either the PPS MO ID field or the ANQP Domain ID field (these
+	 * are mutually exclusive fields) is included in the HS2.0 Indication
+	 * element"
+	 */
+	if (pps_mo_present && domain_id_present)
+		return -EPROTOTYPE;
+
+	*version_out = util_bit_field(hs20_config, 4, 4);;
+	*pps_mo_id_out = 0;
+	*domain_id_out = 0;
+
+	/* No PPS MO ID or Domain ID */
+	if (len == 5)
+		return 0;
+
+	/* we know from is_ie_wfa_ie that the length must be 7 */
+	if (pps_mo_present)
+		*pps_mo_id_out = l_get_u16(data + 5);
+	else
+		*domain_id_out = l_get_u16(data + 5);
+
+	return 0;
+}
+
+int ie_parse_hs20_indication_from_data(const uint8_t *data, size_t len,
+					uint8_t *version, uint16_t *pps_mo_id,
+					uint8_t *domain_id)
+{
+	struct ie_tlv_iter iter;
+
+	ie_tlv_iter_init(&iter, data, len);
+
+	if (!ie_tlv_iter_next(&iter))
+		return -EMSGSIZE;
+
+	if (ie_tlv_iter_get_tag(&iter) != IE_TYPE_VENDOR_SPECIFIC)
+		return -EPROTOTYPE;
+
+	return ie_parse_hs20_indication(&iter, version, pps_mo_id, domain_id);
 }
