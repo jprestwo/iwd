@@ -2344,6 +2344,170 @@ static struct l_genl_msg *netdev_build_cmd_connect(struct netdev *netdev,
 	return msg;
 }
 
+struct rtnl_data {
+	struct netdev *netdev;
+	struct l_genl_msg *cmd_connect;
+	uint8_t addr[ETH_ALEN];
+	int ref;
+};
+
+static void netdev_mac_change_failed(struct netdev *netdev, int error)
+{
+	l_error("Error setting mac address on %d: %s", netdev->index,
+			strerror(-error));
+	netdev->set_powered_cmd_id = 0;
+	netdev_connect_failed(netdev, NETDEV_RESULT_SET_MAC_FAILED,
+					MMPDU_REASON_CODE_UNSPECIFIED);
+}
+
+static void netdev_mac_rand_destroy(void *user_data)
+{
+	struct rtnl_data *req = user_data;
+
+	req->ref--;
+
+	/* still pending requests? */
+	if (req->ref)
+		return;
+
+	l_free(req);
+}
+
+static void netdev_mac_rand_power_up_cb(int error, uint16_t type,
+					const void *data, uint32_t len,
+					void *user_data)
+{
+	struct rtnl_data *req = user_data;
+	struct netdev *netdev = req->netdev;
+
+	netdev->set_powered_cmd_id = 0;
+
+	if (error) {
+		l_error("Error taking interface %u up for MAC "
+			"randomization: %s", netdev->index, strerror(-error));
+		netdev_mac_change_failed(netdev, error);
+		return;
+	}
+
+	/*
+	 * Pick up where we left off in netdev_connect_commmon
+	 */
+	if (req->cmd_connect) {
+		netdev->connect_cmd_id = l_genl_family_send(nl80211,
+					req->cmd_connect, netdev_cmd_connect_cb,
+					netdev, NULL);
+
+		if (!netdev->connect_cmd_id) {
+			l_genl_msg_unref(req->cmd_connect);
+			return;
+		}
+	}
+
+	auth_proto_start(netdev->ap);
+}
+
+static void netdev_mac_rand_set_cb(int error, uint16_t type,
+					const void *data, uint32_t len,
+					void *user_data)
+{
+	struct rtnl_data *req = user_data;
+	struct netdev *netdev = req->netdev;
+
+	if (error) {
+		netdev_mac_change_failed(netdev, error);
+		return;
+	}
+
+	/* Successfully changed MAC, now copy to netdev/handshake */
+	memcpy(netdev->addr, req->addr, ETH_ALEN);
+	memcpy(netdev->handshake->spa, req->addr, ETH_ALEN);
+
+	req->ref++;
+
+	netdev->set_powered_cmd_id = rtnl_set_powered(netdev->index, true,
+					netdev_mac_rand_power_up_cb,
+					req, netdev_mac_rand_destroy);
+	if (!netdev->set_powered_cmd_id) {
+		req->ref--;
+		netdev_mac_change_failed(netdev, -EIO);
+	}
+}
+
+static void netdev_mac_rand_power_down_cb(int error, uint16_t type,
+					const void *data, uint32_t len,
+					void *user_data)
+{
+	struct rtnl_data *req = user_data;
+	struct netdev *netdev = req->netdev;
+
+	if (error) {
+		l_error("Error taking interface %u down for MAC "
+			"randomization: %s", netdev->index, strerror(-error));
+		netdev_mac_change_failed(netdev, error);
+		return;
+	}
+
+	req->ref++;
+
+	l_debug("Setting random address on ifindex: %d to: "MAC,
+					netdev->index, MAC_STR(req->addr));
+	netdev->set_powered_cmd_id = rtnl_set_mac(rtnl, netdev->index,
+					req->addr, netdev_mac_rand_set_cb, req,
+					netdev_mac_rand_destroy);
+	if (!netdev->set_powered_cmd_id) {
+		req->ref--;
+		netdev_mac_change_failed(netdev, -EIO);
+	}
+}
+
+static bool netdev_start_mac_change(struct netdev *netdev,
+					struct l_genl_msg *cmd_connect)
+{
+	struct rtnl_data *req;
+	const char *str;
+	uint8_t new_addr[6];
+	const struct l_settings *config = iwd_get_config();
+
+	str = l_settings_get_value(config, "General", "mac_randomize");
+	if (!str)
+		return false;
+
+	if (strcmp(str, "ssid"))
+		return false;
+
+	wiphy_generate_address_from_ssid(netdev->wiphy,
+					(const char *)netdev->handshake->ssid,
+					new_addr);
+
+	/*
+	 * If the generated address is the same there is no need to change, this
+	 * is likely a re-connect or re-association.
+	 */
+	if (!memcmp(netdev->addr, new_addr, ETH_ALEN))
+		return false;
+
+	req = l_new(struct rtnl_data, 1);
+	req->netdev = netdev;
+	req->cmd_connect = cmd_connect;
+	req->ref++;
+	memcpy(req->addr, new_addr, ETH_ALEN);
+
+	netdev->set_powered_cmd_id = rtnl_set_powered(netdev->index, false,
+					netdev_mac_rand_power_down_cb, req,
+					netdev_mac_rand_destroy);
+	if (!netdev->set_powered_cmd_id) {
+		l_genl_msg_unref(req->cmd_connect);
+		l_free(req);
+		/*
+		 * If the user is requiring MAC randomization/hashing we should
+		 * not allow a connection if setting this MAC failed.
+		 */
+		netdev_mac_change_failed(netdev, -EIO);
+	}
+
+	return true;
+}
+
 static int netdev_connect_common(struct netdev *netdev,
 					struct l_genl_msg *cmd_connect,
 					struct scan_bss *bss,
@@ -2352,17 +2516,6 @@ static int netdev_connect_common(struct netdev *netdev,
 					netdev_event_func_t event_filter,
 					netdev_connect_cb_t cb, void *user_data)
 {
-	if (cmd_connect) {
-		netdev->connect_cmd_id = l_genl_family_send(nl80211,
-					cmd_connect, netdev_cmd_connect_cb,
-					netdev, NULL);
-
-		if (!netdev->connect_cmd_id) {
-			l_genl_msg_unref(cmd_connect);
-			return -EIO;
-		}
-	}
-
 	netdev->event_filter = event_filter;
 	netdev->connect_cb = cb;
 	netdev->user_data = user_data;
@@ -2380,6 +2533,20 @@ static int netdev_connect_common(struct netdev *netdev,
 	if (!wiphy_has_ext_feature(netdev->wiphy,
 					NL80211_EXT_FEATURE_CAN_REPLACE_PTK0))
 		handshake_state_set_no_rekey(hs, true);
+
+	if (netdev_start_mac_change(netdev, cmd_connect))
+		return 0;
+
+	if (cmd_connect) {
+		netdev->connect_cmd_id = l_genl_family_send(nl80211,
+					cmd_connect, netdev_cmd_connect_cb,
+					netdev, NULL);
+
+		if (!netdev->connect_cmd_id) {
+			l_genl_msg_unref(cmd_connect);
+			return -EIO;
+		}
+	}
 
 	auth_proto_start(netdev->ap);
 
@@ -4129,6 +4296,10 @@ static void netdev_newlink_notify(const struct ifinfomsg *ifi, int bytes)
 	}
 
 	if (!netdev->device) /* Did we send NETDEV_WATCH_EVENT_NEW yet? */
+		return;
+
+	/* Ignore, this is for a randomized MAC operation */
+	if (netdev->connect_cb)
 		return;
 
 	new_up = netdev_get_is_up(netdev);
