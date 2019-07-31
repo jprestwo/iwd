@@ -2177,6 +2177,10 @@ static void station_connect_cb(struct netdev *netdev, enum netdev_result result,
 			return;
 
 		break;
+	case NETDEV_RESULT_SET_MAC_FAILED:
+		l_error("Setting randomized MAC failed, try turning off"
+			"'mac_randomize' option");
+		break;
 	default:
 		break;
 	}
