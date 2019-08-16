@@ -2341,6 +2341,10 @@ enum nl80211_commands {
  *	should be picking up the lowest tx power, either tx power per-interface
  *	or per-station.
  *
+ * @NL80211_ATTR_CUSTOM_MAC: Set a customized MAC address on a per-connect
+ *	basis. This attribute should only be used if the driver advertises
+ *	support for NL80211_EXT_FEATURE_LIVE_ADDR_CHANGE.
+ *
  * @NUM_NL80211_ATTR: total number of nl80211_attrs available
  * @NL80211_ATTR_MAX: highest attribute number currently defined
  * @__NL80211_ATTR_AFTER_LAST: internal use
@@ -2793,6 +2797,8 @@ enum nl80211_attrs {
 	NL80211_ATTR_AIRTIME_WEIGHT,
 	NL80211_ATTR_STA_TX_POWER_SETTING,
 	NL80211_ATTR_STA_TX_POWER,
+
+	NL80211_ATTR_CUSTOM_MAC,
 
 	/* add attributes here, update the policy in nl80211.c */
 
@@ -5422,6 +5428,9 @@ enum nl80211_feature_flags {
  * @NL80211_EXT_FEATURE_STA_TX_PWR: This driver supports controlling tx power
  *	to a station.
  *
+ * @NL80211_EXT_FEATURE_LIVE_ADDR_CHANGE: This driver supports changing the MAC
+ *	address while the interface is up.
+ *
  * @NUM_NL80211_EXT_FEATURES: number of extended features.
  * @MAX_NL80211_EXT_FEATURES: highest extended feature index.
  */
@@ -5466,6 +5475,7 @@ enum nl80211_ext_feature_index {
 	NL80211_EXT_FEATURE_SCHED_SCAN_BAND_SPECIFIC_RSSI_THOLD,
 	NL80211_EXT_FEATURE_EXT_KEY_ID,
 	NL80211_EXT_FEATURE_STA_TX_PWR,
+	NL80211_EXT_FEATURE_LIVE_ADDR_CHANGE,
 
 	/* add new features before the definition below */
 	NUM_NL80211_EXT_FEATURES,

@@ -2242,6 +2242,12 @@ static struct l_genl_msg *netdev_build_cmd_connect(struct netdev *netdev,
 						bss->ssid_len, bss->ssid);
 	l_genl_msg_append_attr(msg, NL80211_ATTR_AUTH_TYPE, 4, &auth_type);
 
+
+	l_getrandom(netdev->addr, 6);
+
+	l_genl_msg_append_attr(msg, NL80211_ATTR_CUSTOM_MAC, 6, netdev->addr);
+
+
 	if (prev_bssid)
 		l_genl_msg_append_attr(msg, NL80211_ATTR_PREV_BSSID, ETH_ALEN,
 						prev_bssid);

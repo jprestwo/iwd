@@ -50,8 +50,8 @@ class Test(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        conf = '[General]\nmac_randomize=ssid\n'
-        os.system('echo "%s" > /tmp/main.conf' % conf)
+        #conf = '[General]\nmac_randomize=ssid\n'
+        #os.system('echo "%s" > /tmp/main.conf' % conf)
         pass
 
     @classmethod
