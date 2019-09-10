@@ -736,7 +736,7 @@ static char *known_frequencies_to_string(struct l_queue *known_frequencies)
 
 static void known_network_frequencies_load(void)
 {
-	char **network_names;
+	char **groups;
 	struct l_settings *known_freqs;
 	struct l_queue *known_frequencies;
 	uint32_t i;
@@ -747,23 +747,26 @@ static void known_network_frequencies_load(void)
 		return;
 	}
 
-	network_names = l_settings_get_groups(known_freqs);
-	if (!network_names[0])
+	groups = l_settings_get_groups(known_freqs);
+	if (!groups[0])
 		goto done;
 
-	for (i = 0; network_names[i]; i++) {
+	for (i = 0; groups[i]; i++) {
 		struct network_info *network_info;
 		enum security security;
 		const char *ssid;
 		char *freq_list;
+		const char *name = l_settings_get_value(known_freqs, groups[i],
+							"name");
+		if (!name)
+			continue;
 
-		ssid = storage_network_ssid_from_path(network_names[i],
-								&security);
+		ssid = storage_network_ssid_from_path(name, &security);
 		if (!ssid)
 			continue;
 
-		freq_list = l_settings_get_string(known_freqs, network_names[i],
-									"list");
+		freq_list = l_settings_get_string(known_freqs, groups[i],
+							"list");
 		if (!freq_list)
 			continue;
 
@@ -781,7 +784,7 @@ next:
 	}
 
 done:
-	l_strv_free(network_names);
+	l_strv_free(groups);
 	l_settings_free(known_freqs);
 }
 
@@ -793,6 +796,12 @@ void known_network_frequency_sync(const struct network_info *info)
 	struct l_settings *known_freqs;
 	char *freq_list_str;
 	char *file_path;
+	char group[37];
+	uint8_t uuid[16];
+	uint8_t nsid[16] = {
+		0xfd, 0x88, 0x6f, 0x1e, 0xdf, 0x02, 0xd7, 0x8b,
+		0xc4, 0x90, 0x30, 0x59, 0x73, 0x8a, 0x86, 0x0d
+	};
 
 	if (!info->known_frequencies)
 		return;
@@ -805,7 +814,11 @@ void known_network_frequency_sync(const struct network_info *info)
 
 	file_path = info->ops->get_file_path(info);
 
-	l_settings_set_value(known_freqs, file_path, "list", freq_list_str);
+	l_uuid_v5(nsid, file_path, strlen(file_path), uuid);
+	l_uuid_to_string(uuid, group, sizeof(group));
+
+	l_settings_set_value(known_freqs, group, "name", file_path);
+	l_settings_set_value(known_freqs, group, "list", freq_list_str);
 	l_free(file_path);
 	l_free(freq_list_str);
 

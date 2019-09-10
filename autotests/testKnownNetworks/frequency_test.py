@@ -72,15 +72,17 @@ class Test(unittest.TestCase):
 
         wd.unregister_psk_agent(psk_agent)
 
+        os.system("cat /var/lib/iwd/.known_network.freq")
+
         psk_freqs = None
         hs20_freqs = None
         config = ConfigParser()
         config.read('/var/lib/iwd/.known_network.freq')
         for s in config.sections():
-            if os.path.basename(s) == 'ssidCCMP.psk':
+            if os.path.basename(config[s]['name']) == 'ssidCCMP.psk':
                 psk_freqs = config[s]['list']
                 psk_freqs = psk_freqs.split(' ')
-            elif os.path.basename(s) == 'example.conf':
+            elif os.path.basename(config[s]['name']) == 'example.conf':
                 hs20_freqs = config[s]['list']
                 hs20_freqs = hs20_freqs.split(' ')
 
