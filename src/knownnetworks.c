@@ -785,38 +785,29 @@ done:
 	l_settings_free(known_freqs);
 }
 
-static bool known_network_frequencies_to_settings(
-					const struct network_info *network_info,
-					void *user_data)
-{
-	struct l_settings *known_freqs = user_data;
-	char *freq_list_str;
-	char *network_path;
-
-	if (!network_info->known_frequencies)
-		return true;
-
-	freq_list_str = known_frequencies_to_string(
-					network_info->known_frequencies);
-
-	network_path = storage_get_network_file_path(network_info->type,
-							network_info->ssid);
-
-	l_settings_set_value(known_freqs, network_path, "list", freq_list_str);
-	l_free(network_path);
-	l_free(freq_list_str);
-
-	return true;
-}
-
-static void known_network_frequencies_sync(void)
+/*
+ * Syncs a single network_info frequency to the global frequency file
+ */
+void known_network_frequency_sync(const struct network_info *info)
 {
 	struct l_settings *known_freqs;
+	char *freq_list_str;
+	char *file_path;
 
-	known_freqs = l_settings_new();
+	if (!info->known_frequencies)
+		return;
 
-	known_networks_foreach(known_network_frequencies_to_settings,
-								known_freqs);
+	known_freqs = storage_known_frequencies_load();
+	if (!known_freqs)
+		known_freqs = l_settings_new();
+
+	freq_list_str = known_frequencies_to_string(info->known_frequencies);
+
+	file_path = info->ops->get_file_path(info);
+
+	l_settings_set_value(known_freqs, file_path, "list", freq_list_str);
+	l_free(file_path);
+	l_free(freq_list_str);
 
 	storage_known_frequencies_sync(known_freqs);
 
@@ -906,8 +897,6 @@ static void known_networks_exit(void)
 	struct l_dbus *dbus = dbus_get_bus();
 
 	l_dir_watch_destroy(storage_dir_watch);
-
-	known_network_frequencies_sync();
 
 	l_queue_destroy(known_networks, network_info_free);
 	known_networks = NULL;
