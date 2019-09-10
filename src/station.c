@@ -476,7 +476,8 @@ static void station_anqp_response_cb(enum anqp_result result,
 	search.network = network;
 	search.realms = (const char **)realms;
 
-	known_networks_foreach(match_nai_realms, &search);
+	if (known_networks_foreach(match_nai_realms, &search))
+		l_strv_free(realms);
 
 request_done:
 	l_queue_remove(station->anqp_pending, entry);
