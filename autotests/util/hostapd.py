@@ -45,6 +45,9 @@ class HostapdCLI:
                     interface = intf
                     break
 
+        if not interface:
+            raise Exception('config %s not found' % config)
+
         self.ifname = interface.name
         self.socket_path = os.path.dirname(interface.ctrl_interface)
 
