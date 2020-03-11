@@ -665,6 +665,8 @@ static void create_dbus_system_conf(void)
 	fputs("<type>system</type>\n", fp);
 	fputs("<listen>unix:path=/run/dbus/system_bus_socket</listen>\n", fp);
 	fputs("<limit name=\"reply_timeout\">2147483647</limit>", fp);
+	fputs("<auth>ANONYMOUS</auth>\n", fp);
+	fputs("<allow_anonymous/>\n", fp);
 	fputs("<policy context=\"default\">\n", fp);
 	fputs("<allow user=\"*\"/>\n", fp);
 	fputs("<allow own=\"*\"/>\n", fp);
