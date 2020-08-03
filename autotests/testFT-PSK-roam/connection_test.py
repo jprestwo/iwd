@@ -9,7 +9,7 @@ from iwd import IWD
 from iwd import PSKAgent
 from iwd import NetworkType
 from hwsim import Hwsim
-from hostapd import HostapdCLI, hostapd_map
+from hostapd import HostapdCLI
 import testutil
 
 class Test(unittest.TestCase):
@@ -24,13 +24,14 @@ class Test(unittest.TestCase):
         rule1.source = self.bss_radio[1].addresses[0]
         rule1.bidirectional = True
 
-        wd = IWD()
+        wd = self.wd
 
-        psk_agent = PSKAgent('user@example.com', ('user@example.com',
-                                                                  'secret123'))
+        psk_agent = PSKAgent("EasilyGuessedPassword")
         wd.register_psk_agent(psk_agent)
 
         device = wd.list_devices(1)[0]
+        # prevent autoconnect
+        device.disconnect()
 
         # Check that iwd selects BSS 0 first
         rule0.signal = -2000
@@ -49,7 +50,7 @@ class Test(unittest.TestCase):
 
         ordered_network = device.get_ordered_network('TestFT')
 
-        self.assertEqual(ordered_network.type, NetworkType.eap)
+        self.assertEqual(ordered_network.type, NetworkType.psk)
         self.assertEqual(ordered_network.signal_strength, -2000)
 
         condition = 'not obj.connected'
@@ -66,30 +67,7 @@ class Test(unittest.TestCase):
         self.assertTrue(self.bss_hostapd[0].list_sta())
         self.assertFalse(self.bss_hostapd[1].list_sta())
 
-        testutil.test_iface_operstate(device.name)
-        testutil.test_ifaces_connected(self.bss_hostapd[0].ifname, device.name)
-        self.assertRaises(Exception, testutil.test_ifaces_connected,
-                          (self.bss_hostapd[1].ifname, device.name))
-
-        device.disconnect()
-
-        condition = 'not obj.connected'
-        wd.wait_for_object_condition(ordered_network.network_object, condition)
-
-        ordered_network = device.get_ordered_network('TestFT')
-
-        self.assertEqual(ordered_network.type, NetworkType.eap)
-
-        condition = 'not obj.connected'
-        wd.wait_for_object_condition(ordered_network.network_object, condition)
-
-        ordered_network.network_object.connect()
-
-        condition = 'obj.connected'
-        wd.wait_for_object_condition(ordered_network.network_object, condition)
-
-        self.assertTrue(self.bss_hostapd[0].list_sta())
-        self.assertFalse(self.bss_hostapd[1].list_sta())
+        wd.unregister_psk_agent(psk_agent)
 
         testutil.test_iface_operstate(device.name)
         testutil.test_ifaces_connected(self.bss_hostapd[0].ifname, device.name)
@@ -120,6 +98,92 @@ class Test(unittest.TestCase):
         self.assertRaises(Exception, testutil.test_ifaces_connected,
                           (self.bss_hostapd[0].ifname, device.name))
 
+    def test_roam_on_beacon_loss(self):
+        print("Starting test_roam_on_beacon_loss")
+        hwsim = Hwsim()
+
+        rule0 = hwsim.rules.create()
+        rule0.source = self.bss_radio[0].addresses[0]
+        rule0.bidirectional = True
+
+        rule1 = hwsim.rules.create()
+        rule1.source = self.bss_radio[1].addresses[0]
+        rule1.bidirectional = True
+
+        wd = self.wd
+
+        psk_agent = PSKAgent("EasilyGuessedPassword")
+        wd.register_psk_agent(psk_agent)
+
+        device = wd.list_devices(1)[0]
+        # prevent autoconnect
+        device.disconnect()
+
+        # Check that iwd selects BSS 0 first
+        rule0.signal = -2000
+        rule1.signal = -2500
+
+        condition = 'not obj.scanning'
+        wd.wait_for_object_condition(device, condition)
+
+        device.scan()
+
+        condition = 'obj.scanning'
+        wd.wait_for_object_condition(device, condition)
+
+        condition = 'not obj.scanning'
+        wd.wait_for_object_condition(device, condition)
+
+        ordered_network = device.get_ordered_network("TestFT")
+        self.assertEqual(ordered_network.type, NetworkType.psk)
+        self.assertEqual(ordered_network.signal_strength, -2000)
+
+        condition = 'not obj.connected'
+        wd.wait_for_object_condition(ordered_network.network_object, condition)
+
+        self.assertFalse(self.bss_hostapd[0].list_sta())
+        self.assertFalse(self.bss_hostapd[1].list_sta())
+
+        ordered_network.network_object.connect()
+
+        condition = 'obj.connected'
+        wd.wait_for_object_condition(ordered_network.network_object, condition)
+
+        self.assertTrue(self.bss_hostapd[0].list_sta())
+        self.assertFalse(self.bss_hostapd[1].list_sta())
+
+        wd.unregister_psk_agent(psk_agent)
+
+        testutil.test_iface_operstate(device.name)
+        testutil.test_ifaces_connected(self.bss_hostapd[0].ifname, device.name)
+        self.assertRaises(Exception, testutil.test_ifaces_connected,
+                          (self.bss_hostapd[1].ifname, device.name))
+
+        # Check that iwd starts transition to BSS 1 in less than 20 seconds
+        # from a beacon loss event
+        rule0.drop = True
+        rule0.signal = -3000
+        wd.wait(2)
+        rule0.drop = False
+
+        condition = 'obj.state == DeviceState.roaming'
+        wd.wait_for_object_condition(device, condition, 20)
+
+        # Check that iwd is on BSS 1 once out of roaming state and doesn't
+        # go through 'disconnected', 'autoconnect', 'connecting' in between
+        condition = 'obj.state != DeviceState.roaming'
+        wd.wait_for_object_condition(device, condition, 5)
+
+        self.assertEqual(device.state, iwd.DeviceState.connected)
+        self.assertTrue(self.bss_hostapd[1].list_sta())
+
+        testutil.test_iface_operstate(device.name)
+        testutil.test_ifaces_connected(self.bss_hostapd[1].ifname, device.name)
+        self.assertRaises(Exception, testutil.test_ifaces_connected,
+                          (self.bss_hostapd[0].ifname, device.name))
+    def setUp(self):
+        self.wd = IWD()
+
     def tearDown(self):
         os.system('ifconfig "' + self.bss_hostapd[0].ifname + '" down')
         os.system('ifconfig "' + self.bss_hostapd[1].ifname + '" down')
@@ -127,28 +191,24 @@ class Test(unittest.TestCase):
         os.system('ifconfig "' + self.bss_hostapd[1].ifname + '" up')
 
         hwsim = Hwsim()
-        wd = IWD()
-        device = wd.list_devices(1)[0]
+        device = self.wd.list_devices(1)[0]
         try:
             device.disconnect()
         except:
             pass
 
         condition = 'obj.state == DeviceState.disconnected'
-        wd.wait_for_object_condition(device, condition)
+        self.wd.wait_for_object_condition(device, condition)
 
         for rule in list(hwsim.rules.keys()):
             del hwsim.rules[rule]
 
     @classmethod
     def setUpClass(cls):
-        os.system('ifconfig lo up')
-        IWD.copy_to_storage('TestFT.8021x')
-
         hwsim = Hwsim()
 
-        cls.bss_hostapd = [ HostapdCLI(config='ft-eap-ccmp-1.conf'),
-                            HostapdCLI(config='ft-eap-ccmp-2.conf') ]
+        cls.bss_hostapd = [ HostapdCLI(config='ft-psk-ccmp-1.conf'),
+                            HostapdCLI(config='ft-psk-ccmp-2.conf') ]
         cls.bss_radio =  [ hwsim.get_radio('rad0'),
                            hwsim.get_radio('rad1') ]
 
