@@ -15,7 +15,7 @@ import weakref
 from abc import ABCMeta, abstractmethod
 from enum import Enum
 
-import wiphy
+from config import ctx
 
 IWD_STORAGE_DIR =               '/var/lib/iwd'
 IWD_CONFIG_DIR =                '/etc/iwd'
@@ -873,7 +873,10 @@ class DeviceList(collections.Mapping):
 
 
 class IWD(AsyncOpAbstract):
-    ''''''
+    '''
+        Start an IWD instance. By default IWD will be started and with the
+        config directory set to /tmp.
+    '''
     _bus = dbus.SystemBus()
 
     _object_manager_if = None
@@ -882,40 +885,22 @@ class IWD(AsyncOpAbstract):
     _devices = None
     _instance = None
 
-    def __init__(self, start_iwd_daemon = False,
-                                               iwd_config_dir = IWD_CONFIG_DIR):
+    def __init__(self, start_iwd_daemon = True, iwd_config_dir = '/tmp'):
         global mainloop
         mainloop = GLib.MainLoop()
 
+        self._iwd_proc = None
+
         if start_iwd_daemon:
-            args = []
-            iwd_wiphys = [wname for wname, wiphy in wiphy.wiphy_map.items()
-                          if wiphy.use == 'iwd']
-            whitelist = ','.join(iwd_wiphys)
-
-            if os.environ.get('IWD_TEST_VALGRIND', None) == 'on':
-                    args.append('valgrind')
-                    args.append('--leak-check=full')
-                    args.append('--log-file=/tmp/valgrind.log')
-
-            os.environ["CONFIGURATION_DIRECTORY"] = iwd_config_dir;
-
-            args.append('iwd')
-            args.append('-p')
-            args.append(whitelist)
-            args.append('-d')
-
-            import subprocess
-            iwd_proc = subprocess.Popen(args)
-
-            self._iwd_proc = iwd_proc
+            self._iwd_proc = ctx.start_iwd(iwd_config_dir)
 
         tries = 0
         while not self._bus.name_has_owner(IWD_SERVICE):
-            if os.environ['IWD_TEST_TIMEOUTS'] == 'on':
+            if ctx.args.gdb == 'None':
                 if tries > 100:
                     if start_iwd_daemon:
-                        iwd_proc.terminate()
+                        self._iwd_proc.kill()
+                        self._iwd_proc = None
                     raise TimeoutError('IWD has failed to start')
                 tries += 1
             time.sleep(0.1)
@@ -935,12 +920,9 @@ class IWD(AsyncOpAbstract):
         self._known_networks = None
         self._devices = None
 
-        self._iwd_proc.terminate()
-        self._iwd_proc.wait()
-
-        self._iwd_proc = None
-
-        del os.environ["CONFIGURATION_DIRECTORY"]
+        if self._iwd_proc is not None:
+            self._iwd_proc.kill()
+            self._iwd_proc = None
 
     @property
     def _object_manager(self):
