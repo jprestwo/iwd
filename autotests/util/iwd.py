@@ -948,15 +948,18 @@ class IWD(AsyncOpAbstract):
             self._wait_timed_out = True
             return False
 
-        timeout = GLib.timeout_add_seconds(max_wait, wait_timeout_cb)
-        context = mainloop.get_context()
-        while not eval(condition_str):
-            context.iteration(may_block=True)
-            if self._wait_timed_out and os.environ['IWD_TEST_TIMEOUTS'] == 'on':
-                raise TimeoutError('[' + condition_str + ']'\
-                                   ' condition was not met in '\
-                                   + str(max_wait) + ' sec')
-        GLib.source_remove(timeout)
+        try:
+            timeout = GLib.timeout_add_seconds(max_wait, wait_timeout_cb)
+            context = mainloop.get_context()
+            while not eval(condition_str):
+                context.iteration(may_block=True)
+                if self._wait_timed_out and ctx.args.gdb == 'None':
+                    raise TimeoutError('[' + condition_str + ']'\
+                                       ' condition was not met in '\
+                                       + str(max_wait) + ' sec')
+        finally:
+            if not self._wait_timed_out:
+                GLib.source_remove(timeout)
 
     def wait(self, time):
         self._wait_timed_out = False
@@ -964,10 +967,14 @@ class IWD(AsyncOpAbstract):
             self._wait_timed_out = True
             return False
 
-        GLib.timeout_add(int(time * 1000), wait_timeout_cb)
-        context = mainloop.get_context()
-        while not self._wait_timed_out:
-            context.iteration(may_block=True)
+        try:
+            timeout = GLib.timeout_add(int(time * 1000), wait_timeout_cb)
+            context = mainloop.get_context()
+            while not self._wait_timed_out:
+                context.iteration(may_block=True)
+        finally:
+            if not self._wait_timed_out:
+                GLib.source_remove(timeout)
 
     @staticmethod
     def clear_storage():
@@ -1013,14 +1020,16 @@ class IWD(AsyncOpAbstract):
             self._wait_timed_out = True
             return False
 
-        timeout = GLib.timeout_add_seconds(max_wait, wait_timeout_cb)
-        context = mainloop.get_context()
-        while len(self._devices) < wait_to_appear:
-            context.iteration(may_block=True)
-            if self._wait_timed_out:
-                raise TimeoutError('IWD has no associated devices')
-
-        GLib.source_remove(timeout)
+        try:
+            timeout = GLib.timeout_add_seconds(max_wait, wait_timeout_cb)
+            context = mainloop.get_context()
+            while len(self._devices) < wait_to_appear:
+                context.iteration(may_block=True)
+                if self._wait_timed_out:
+                    raise TimeoutError('IWD has no associated devices')
+        finally:
+            if not self._wait_timed_out:
+                GLib.source_remove(timeout)
 
         return list(self._devices.values())
 
