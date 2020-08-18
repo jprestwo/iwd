@@ -368,6 +368,14 @@ int main(int argc, char *argv[])
 	const char *config_dir;
 	char **config_dirs;
 	int i;
+	uint8_t *a = malloc(10);
+	uint8_t *b = malloc(10);
+
+	printf("%02x", a[0]);
+
+	free(b);
+
+	printf("%02x", b[0]);
 
 	for (;;) {
 		int opt;
