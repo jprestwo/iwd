@@ -24,8 +24,8 @@ class Test(unittest.TestCase):
 
         ordered_network.network_object.connect()
 
-        condition = 'obj.connected'
-        wd.wait_for_object_condition(ordered_network.network_object, condition)
+        condition = 'obj.state == DeviceState.connected'
+        wd.wait_for_object_condition(dev, condition)
 
         wd.unregister_psk_agent(psk_agent)
 
@@ -74,12 +74,12 @@ class Test(unittest.TestCase):
 
             networks['TestAP2'].network_object.connect()
 
-            condition = 'obj.connected'
-            wd.wait_for_object_condition(networks['TestAP2'].network_object,
-                                         condition)
+            condition = 'obj.state == DeviceState.connected'
+            wd.wait_for_object_condition(dev2, condition)
 
+            print("TESTING IFACES CONNECTED")
             testutil.test_iface_operstate(dev2.name)
-            testutil.test_ifaces_connected(dev1.name, dev2.name)
+            testutil.test_ifaces_connected(dev1.name, dev2.name, group=False)
 
             wd.unregister_psk_agent(psk_agent)
 
@@ -94,6 +94,8 @@ class Test(unittest.TestCase):
         # Finally test dev1 can go to client mode and connect again
         self.client_connect(wd, dev1)
 
+        print("END OF TEST\n")
+
     @classmethod
     def setUpClass(cls):
         IWD.copy_to_storage('TestAP1.psk')
@@ -101,6 +103,7 @@ class Test(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         IWD.clear_storage()
+        print("Tearing down testAP")
 
 if __name__ == '__main__':
     unittest.main(exit=True)

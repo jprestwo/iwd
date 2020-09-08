@@ -36,9 +36,9 @@ class Test(unittest.TestCase):
         device = devices[0]
 
         condition = 'obj.scanning'
-        wd.wait_for_object_condition(device, condition, 20)
+        wd.wait_for_object_condition(device, condition)
         condition = 'not obj.scanning'
-        wd.wait_for_object_condition(device, condition, 20)
+        wd.wait_for_object_condition(device, condition)
 
         device.scan()
 
@@ -53,7 +53,7 @@ class Test(unittest.TestCase):
             self.set_network(network.name)
 
     def test_scan(self):
-        wd = IWD(True, '/tmp')
+        wd = IWD(True)
 
         self.validate_scan(wd)
 

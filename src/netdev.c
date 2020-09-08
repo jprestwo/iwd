@@ -2124,6 +2124,7 @@ static void netdev_cmd_connect_cb(struct l_genl_msg *msg, void *user_data)
 
 	netdev->connect_cmd_id = 0;
 
+	l_debug("");
 	/* Wait for connect event */
 	if (l_genl_msg_get_error(msg) >= 0) {
 		netdev->connected = true;
@@ -2479,6 +2480,8 @@ static int netdev_begin_connection(struct netdev *netdev)
 		 */
 		netdev->connected = true;
 	}
+
+	l_debug("Connecting to "MAC, MAC_STR(netdev->handshake->aa));
 
 	return 0;
 

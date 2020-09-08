@@ -11,6 +11,8 @@ from iwd import NetworkType
 from hwsim import Hwsim
 from hostapd import HostapdCLI
 import testutil
+from time import sleep
+from config import ctx
 
 class Test(unittest.TestCase):
     def test_roam_success(self):
@@ -86,12 +88,12 @@ class Test(unittest.TestCase):
         rule0.signal = -8000
 
         condition = 'obj.state == DeviceState.roaming'
-        wd.wait_for_object_condition(device, condition, 10)
+        wd.wait_for_object_condition(device, condition)
 
         # Check that iwd is on BSS 1 once out of roaming state and doesn't
         # go through 'disconnected', 'autoconnect', 'connecting' in between
         condition = 'obj.state != DeviceState.roaming'
-        wd.wait_for_object_condition(device, condition, 5)
+        wd.wait_for_object_condition(device, condition)
 
         rule1.signal = -2000
 
@@ -112,10 +114,10 @@ class Test(unittest.TestCase):
         rule2.signal = -1000
 
         condition = 'obj.state == DeviceState.roaming'
-        wd.wait_for_object_condition(device, condition, 15)
+        wd.wait_for_object_condition(device, condition)
 
         condition = 'obj.state != DeviceState.roaming'
-        wd.wait_for_object_condition(device, condition, 5)
+        wd.wait_for_object_condition(device, condition)
 
         self.assertEqual(device.state, iwd.DeviceState.connected)
         self.assertTrue(self.bss_hostapd[2].list_sta())
@@ -158,18 +160,28 @@ class Test(unittest.TestCase):
                            hwsim.get_radio('rad1'),
                            hwsim.get_radio('rad2') ]
 
+        ctx.start_process(['ifconfig', cls.bss_hostapd[0].ifname, 'down', 'hw', 'ether', '12:00:00:00:00:01', 'up'], wait=True)
+        ctx.start_process(['ifconfig', cls.bss_hostapd[1].ifname, 'down', 'hw', 'ether', '12:00:00:00:00:02', 'up'], wait=True)
+        ctx.start_process(['ifconfig', cls.bss_hostapd[2].ifname, 'down', 'hw', 'ether', '12:00:00:00:00:03', 'up'], wait=True)
+
         # Set interface addresses to those expected by hostapd config files
+        '''
         os.system('ifconfig "' + cls.bss_hostapd[0].ifname +
                 '" down hw ether 12:00:00:00:00:01 up')
         os.system('ifconfig "' + cls.bss_hostapd[1].ifname +
                 '" down hw ether 12:00:00:00:00:02 up')
         os.system('ifconfig "' + cls.bss_hostapd[2].ifname +
                 '" down hw ether 12:00:00:00:00:03 up')
-
+        '''
+        print("Reloading hostapd's")
         cls.bss_hostapd[0].reload()
+        cls.bss_hostapd[0].wait_for_event("AP-ENABLED")
         cls.bss_hostapd[1].reload()
+        cls.bss_hostapd[1].wait_for_event("AP-ENABLED")
         cls.bss_hostapd[2].reload()
+        cls.bss_hostapd[2].wait_for_event("AP-ENABLED")
 
+        print("Reload complete, setting neighbors")
         # Fill in the neighbor AP tables in both BSSes.  By default each
         # instance knows only about current BSS, even inside one hostapd
         # process.
@@ -189,6 +201,16 @@ class Test(unittest.TestCase):
                 '1200000000018f0000005101060603000000')
         cls.bss_hostapd[2].set_neighbor('12:00:00:00:00:02', 'TestFT',
                 '1200000000028f0000005101060603000000')
+
+        print("Done settting neighbors\n\n\n")
+        #cls.bss_hostapd[0].reload()
+        #cls.bss_hostapd[0].wait_for_event("AP-ENABLED")
+        #cls.bss_hostapd[1].reload()
+        #cls.bss_hostapd[1].wait_for_event("AP-ENABLED")
+        #cls.bss_hostapd[2].reload()
+        #cls.bss_hostapd[2].wait_for_event("AP-ENABLED")
+
+        sleep(10)
 
     @classmethod
     def tearDownClass(cls):

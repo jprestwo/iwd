@@ -49,6 +49,8 @@ class Test(unittest.TestCase):
         wd.wait_for_object_condition(ordered_network.network_object, condition)
 
     def test_connection_success(self):
+        wd = IWD()
+
         hwsim = Hwsim()
         non_ht_hostapd = HostapdCLI(config='non-ht-vht.conf')
         ht_hostapd = HostapdCLI(config='ht.conf')
@@ -75,8 +77,6 @@ class Test(unittest.TestCase):
         rule2.source = non_ht_radio.addresses[0]
         rule2.bidirectional = True
         rule2.signal = -2000
-
-        wd = IWD()
 
         psk_agent = PSKAgent("secret123")
         wd.register_psk_agent(psk_agent)

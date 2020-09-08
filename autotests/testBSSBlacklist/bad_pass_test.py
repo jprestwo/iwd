@@ -15,6 +15,8 @@ from hwsim import Hwsim
 class Test(unittest.TestCase):
 
     def test_connection_success(self):
+        wd = IWD()
+
         hwsim = Hwsim()
 
         bss_hostapd = [ HostapdCLI(config='ssid1.conf'),
@@ -38,8 +40,6 @@ class Test(unittest.TestCase):
         rule2.source = bss_radio[2].addresses[0]
         rule2.bidirectional = True
         rule2.signal = -4000
-
-        wd = IWD(True, '/tmp')
 
         psk_agent = PSKAgent("wrong_password")
         wd.register_psk_agent(psk_agent)
@@ -79,6 +79,8 @@ class Test(unittest.TestCase):
 
         condition = 'obj.connected'
         wd.wait_for_object_condition(ordered_network.network_object, condition)
+
+        wd.unregister_psk_agent(psk_agent)
 
     @classmethod
     def setUpClass(cls):

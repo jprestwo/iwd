@@ -15,6 +15,8 @@ from hwsim import Hwsim
 class Test(unittest.TestCase):
 
     def test_connection_success(self):
+        wd = IWD()
+
         hwsim = Hwsim()
 
         bss_hostapd = [ HostapdCLI(config='ssid1.conf'),
@@ -39,22 +41,20 @@ class Test(unittest.TestCase):
         rule2.bidirectional = True
         rule2.signal = -2000
 
-        wd = IWD(True, '/tmp')
-
         psk_agent = PSKAgent("secret123")
         wd.register_psk_agent(psk_agent)
 
         dev1, dev2 = wd.list_devices(2)
 
-        condition = 'not obj.scanning'
-        wd.wait_for_object_condition(dev1, condition)
+        #condition = 'not obj.scanning'
+        #wd.wait_for_object_condition(dev1, condition)
 
-        dev1.scan()
+        #dev1.scan()
 
-        condition = 'not obj.scanning'
-        wd.wait_for_object_condition(dev1, condition)
+        #condition = 'not obj.scanning'
+        #wd.wait_for_object_condition(dev1, condition)
 
-        ordered_network = dev1.get_ordered_network("TestBlacklist")
+        ordered_network = dev1.get_ordered_network("TestBlacklist", scan_if_needed=True)
 
         self.assertEqual(ordered_network.type, NetworkType.psk)
 

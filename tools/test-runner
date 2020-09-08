@@ -41,7 +41,7 @@ config = None
 intf_id = 0
 rad_id = 0
 
-TEST_MAX_TIMEOUT = 45
+TEST_MAX_TIMEOUT = 120
 
 def dbg(*s):
 	'''
@@ -153,7 +153,7 @@ class Process:
 		run over the entire test run and will not be killed after each
 		test exits.
 	'''
-	def __init__(self, args, wait=False, multi_test=False, env=None, ctx=None):
+	def __init__(self, args, wait=False, multi_test=False, env=None, ctx=None, check=False):
 		self.args = args
 		self.wait = wait
 		self.name = args[0]
@@ -194,7 +194,7 @@ class Process:
 					self.stdout = sys.__stdout__
 					self.stderr = sys.__stderr__
 
-		if not wait:
+		if not wait and not check:
 			self.pid = subprocess.Popen(self.args, stdout=self.stdout, \
 							stderr=self.stderr, env=env, \
 							cwd=os.getcwd())
@@ -203,6 +203,8 @@ class Process:
 			self.ret = subprocess.call(self.args, stdout=self.stdout, \
 							stderr=self.stderr)
 			print("%s returned %d" % (args[0], self.ret))
+			if check and self.ret != 0:
+				raise subprocess.CalledProcessError(returncode=self.ret, cmd=self.args)
 
 	def __del__(self):
 		print("Del process %s" % self.args)
@@ -219,6 +221,8 @@ class Process:
 			self.pid.kill()
 
 		self.pid.wait(timeout=15)
+		#if self.ctx:
+		#	self.ctx.processes.remove(self)
 
 	def wait_for_socket(self, socket, wait):
 		waited = 0
@@ -394,7 +398,7 @@ class Hostapd:
 
 		self.process = ctx.start_process(args)
 
-		self.process.wait_for_socket(self.global_ctrl_iface, 10)
+		self.process.wait_for_socket(self.global_ctrl_iface, 30)
 
 	def _rewrite_config(self, config):
 		'''
@@ -455,8 +459,8 @@ class TestContext:
 		self.iwd_extra_options = None
 		self.results = {}
 
-	def start_process(self, args, wait=False, multi_test=False, env=None):
-		p = Process(args, wait, multi_test, env, ctx=self)
+	def start_process(self, args, wait=False, multi_test=False, env=None, check=False):
+		p = Process(args, wait, multi_test, env, ctx=self, check=check)
 
 		if not wait:
 			self.processes.append(p)
@@ -549,6 +553,9 @@ class TestContext:
 
 		pid = self.start_process(args, env=env)
 		return pid
+	def stop_iwd(self):
+		if self.is_process_running('iwd'):
+			os.system('killall iwd')
 
 	def start_hostapd(self):
 		if not 'HOSTAPD' in self.hw_config:
@@ -589,6 +596,8 @@ class TestContext:
 		radius_config = settings.get('radius_server', None)
 
 		self.hostapd = Hostapd(self, hapd_radios, hapd_configs, radius_config)
+
+		#sleep(20)
 
 	def start_ofono(self):
 		sim_keys = self.hw_config['SETUP'].get('sim_keys', None)
@@ -665,6 +674,8 @@ class TestContext:
 		for p in [p for p in self.processes if p.multi_test is False]:
 			print("Killing process %s" % p.name)
 			self.stop_process(p)
+
+		print(self)
 
 	def is_process_running(self, process):
 		for p in self.processes:
@@ -856,11 +867,22 @@ def pre_test(ctx, test):
 	ctx.start_hostapd()
 	ctx.start_ofono()
 
+	if ctx.hw_config.has_option('SETUP', 'start_iwd'):
+		start = ctx.hw_config.getboolean('SETUP', 'start_iwd')
+	else:
+		start = True
+	#start = ctx.hw_config['SETUP'].get('start_iwd', True)
+	print("Start=" + str(start))
+	if start:
+		ctx.start_iwd()
+	else:
+		print("Not starting IWD from test-runner")
+
 	print(ctx)
 
 	sys.path.insert(1, test)
 
-	return (to_copy, subtests)
+	return (to_copy, sorted(subtests))
 
 def post_test(ctx, to_copy):
 	'''

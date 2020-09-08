@@ -8,6 +8,7 @@ import iwd
 from iwd import IWD
 from iwd import PSKAgent
 from iwd import NetworkType
+from time import sleep
 
 from hostapd import HostapdCLI
 from hwsim import Hwsim
@@ -15,6 +16,7 @@ from hwsim import Hwsim
 class Test(unittest.TestCase):
 
     def test_connection_success(self):
+        wd = IWD()
         hwsim = Hwsim()
 
         bss_hostapd = [ HostapdCLI(config='ssid1.conf'),
@@ -37,9 +39,7 @@ class Test(unittest.TestCase):
         rule2 = hwsim.rules.create()
         rule2.source = bss_radio[2].addresses[0]
         rule2.bidirectional = True
-        rule2.signal = -10000
-
-        wd = IWD(True)
+        rule2.signal = -9000
 
         psk_agent = PSKAgent(["secret123", 'secret123'])
         wd.register_psk_agent(psk_agent)
@@ -47,15 +47,15 @@ class Test(unittest.TestCase):
         devices = wd.list_devices(1)
         device = devices[0]
 
-        condition = 'not obj.scanning'
-        wd.wait_for_object_condition(device, condition)
+        #condition = 'not obj.scanning'
+        #wd.wait_for_object_condition(device, condition)
 
-        device.scan()
+        #device.scan()
 
-        condition = 'not obj.scanning'
-        wd.wait_for_object_condition(device, condition)
+        #condition = 'not obj.scanning'
+        #wd.wait_for_object_condition(device, condition)
 
-        ordered_network = device.get_ordered_network("TestBlacklist")
+        ordered_network = device.get_ordered_network("TestBlacklist", scan_if_needed=True)
 
         self.assertEqual(ordered_network.type, NetworkType.psk)
 
@@ -70,8 +70,11 @@ class Test(unittest.TestCase):
         with self.assertRaises(iwd.FailedEx):
             ordered_network.network_object.connect()
 
-        rule0.drop = False
-        rule1.drop = False
+        rule0.remove()
+        rule1.remove()
+        rule2.remove()
+
+        wd.wait(3)
 
         # This connect should work
         ordered_network.network_object.connect()

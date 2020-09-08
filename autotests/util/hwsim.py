@@ -102,7 +102,8 @@ class Rule(HwsimDBusAbstract):
     @signal.setter
     def signal(self, value):
         self._prop_proxy.Set(self._iface_name, 'SignalStrength',
-                dbus.Int16(value))
+                dbus.Int16(value), reply_handler=self._success, error_handler=self._failure)
+        self._wait_for_async_op()
 
     @property
     def drop(self):
@@ -110,7 +111,8 @@ class Rule(HwsimDBusAbstract):
 
     @drop.setter
     def drop(self, value):
-        self._prop_proxy.Set(self._iface_name, 'Drop', dbus.Boolean(value))
+        self._prop_proxy.Set(self._iface_name, 'Drop', dbus.Boolean(value), reply_handler=self._success, error_handler=self._failure)
+        self._wait_for_async_op()
 
     @property
     def delay(self):
@@ -125,6 +127,9 @@ class Rule(HwsimDBusAbstract):
                 error_handler=self._failure)
 
         self._wait_for_async_op()
+
+    def __del__(self):
+        self.remove()
 
     def __str__(self, prefix = ''):
         return prefix + 'Rule: ' + self.path + '\n' + \

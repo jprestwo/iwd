@@ -28,7 +28,7 @@ class Test(unittest.TestCase):
         testutil.test_ifaces_connected(dev1.name, dev2.name)
 
     def test_connection_success(self):
-        wd = IWD(True)
+        wd = IWD()
 
         self.validate_connection(wd)
 

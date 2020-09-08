@@ -18,10 +18,10 @@ class TstAgent(iwd.SignalAgent):
 
 class Test(unittest.TestCase):
     def test_rssi_agent(self):
+        wd = IWD()
+
         rule = Hwsim().rules.create()
         rule.signal = -4000
-
-        wd = IWD()
 
         device = wd.list_devices(1)[0]
 
@@ -71,7 +71,7 @@ class Test(unittest.TestCase):
                 rule.signal = centre
                 agent.level = -1
                 condition = 'obj.level == ' + str(level)
-                wd.wait_for_object_condition(agent, condition, 3)
+                wd.wait_for_object_condition(agent, condition)
 
                 self.assertTrue(agent.calls > 0)
                 self.assertEqual(agent.device_path, device.device_path)

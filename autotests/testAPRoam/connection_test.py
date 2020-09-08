@@ -15,6 +15,7 @@ from hwsim import Hwsim
 class Test(unittest.TestCase):
 
     def test_connection_success(self):
+        wd = IWD()
         hwsim = Hwsim()
 
         bss_hostapd = [ HostapdCLI(config='ssid1.conf'),
@@ -24,7 +25,23 @@ class Test(unittest.TestCase):
                        hwsim.get_radio('rad1'),
                        hwsim.get_radio('rad2') ]
 
-        wd = IWD()
+        rule0 = hwsim.rules.create()
+        rule0.source = bss_radio[0].addresses[0]
+        rule0.bidirectional = True
+
+        rule1 = hwsim.rules.create()
+        rule1.source = bss_radio[1].addresses[0]
+        rule1.bidirectional = True
+
+        rule2 = hwsim.rules.create()
+        rule2.source = bss_radio[2].addresses[0]
+        rule2.bidirectional = True
+
+        rule0.signal = -2000
+        rule1.signal = -2500
+        rule2.signal = -3000
+
+        #wd = IWD()
 
         psk_agent = PSKAgent("secret123")
         wd.register_psk_agent(psk_agent)
@@ -60,13 +77,13 @@ class Test(unittest.TestCase):
                  (bss_radio[2].addresses[0], '8f0000005103060603000000')])
 
         condition = 'obj.state == DeviceState.roaming'
-        wd.wait_for_object_condition(device, condition, 15)
+        wd.wait_for_object_condition(device, condition)
 
         condition = 'obj.state != DeviceState.roaming'
-        wd.wait_for_object_condition(device, condition, 5)
+        wd.wait_for_object_condition(device, condition)
 
         self.assertEqual(device.state, iwd.DeviceState.connected)
-        self.assertTrue(bss_hostapd[1].list_sta())
+        self.assertTrue(bss_hostapd[0].list_sta())
         device.disconnect()
 
         condition = 'not obj.connected'

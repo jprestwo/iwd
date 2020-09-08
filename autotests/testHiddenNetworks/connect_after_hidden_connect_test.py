@@ -27,7 +27,8 @@ class TestConnectionAfterHiddenNetwork(unittest.TestCase):
         self._ex = ex
 
     def test_connection(self):
-        wd = IWD(True, '/tmp')
+        print("CONNECT AFTER HIDDEN CONNECT")
+        wd = IWD()
 
         psk_agent = PSKAgent("secret123")
         wd.register_psk_agent(psk_agent)

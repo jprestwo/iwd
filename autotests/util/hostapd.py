@@ -47,8 +47,9 @@ class HostapdCLI:
         self.ifname = self.interface.name
         self.socket_path = os.path.dirname(self.interface.ctrl_interface)
 
-        self.cmdline = 'hostapd_cli -p"' + self.socket_path + '" -i"' + \
-                self.ifname + '"'
+        self.cmdline = ['hostapd_cli', '-p', self.socket_path, '-i', self.ifname]
+        #self.cmdline = 'hostapd_cli -p"' + self.socket_path + '" -i"' + \
+        #        self.ifname + '"'
 
         if not hasattr(self, '_hostapd_restarted'):
             self._hostapd_restarted = False
@@ -124,13 +125,18 @@ class HostapdCLI:
         self._del_hostapd()
 
     def wps_push_button(self):
-        os.system(self.cmdline + ' wps_pbc')
+        ctx.start_process(self.cmdline + ['wps_pbc'], wait=True)
+        #os.system(self.cmdline + ' wps_pbc')
 
     def wps_pin(self, pin):
-        os.system(self.cmdline + ' wps_pin any ' + pin)
+        cmd = self.cmdline + ['wps_pin', 'any', pin]
+        ctx.start_process(cmd, wait=True)
+        #os.system(self.cmdline + ' wps_pin any ' + pin)
 
     def deauthenticate(self, client_address):
-        os.system(self.cmdline + ' deauthenticate ' + client_address)
+        cmd = self.cmdline + ['deauthenticate', client_address]
+        ctx.start_process(cmd, wait=True)
+        #os.system(self.cmdline + ' deauthenticate ' + client_address)
 
     def eapol_reauth(self, client_address):
         cmd = 'IFNAME=' + self.ifname + ' EAPOL_REAUTH ' + client_address
@@ -139,21 +145,30 @@ class HostapdCLI:
     def reload(self):
         # Seemingly all three commands needed for the instance to notice
         # interface's address change
-        cmds = 'reload\ndisable\nenable\n'
-        proc = os.popen(self.cmdline, mode='w')
-        lines = proc.write(cmds)
-        proc.close()
+        ctx.start_process(self.cmdline + ['reload'], wait=True)
+        ctx.start_process(self.cmdline + ['disable'], wait=True)
+        ctx.start_process(self.cmdline + ['enable'], wait=True)
+        #cmds = 'reload\ndisable\nenable\n'
+        #proc = os.popen(self.cmdline, mode='w')
+        #lines = proc.write(cmds)
+        #proc.close()
 
     def list_sta(self):
-        proc = os.popen(self.cmdline + ' list_sta')
-        lines = proc.read()
-        proc.close()
+        proc = ctx.start_process(self.cmdline + ['list_sta'])
+        proc.pid.wait()
+        lines = proc.pid.stdout.read().decode('utf-8')
+        #proc = os.popen(' '.join(self.cmdline) + ' list_sta')
+        #lines = proc.read()
+        #proc.close()
+        #proc.pid.wait()
 
         return [line for line in lines.split('\n') if line]
 
     def set_neighbor(self, addr, ssid, nr):
-        os.system(self.cmdline + ' set_neighbor ' + addr + ' ssid=\\""' + ssid +
-                    '"\\" nr=' + nr)
+        cmd = self.cmdline + ['set_neighbor', addr, 'ssid=\\""%s"\\"' % ssid, 'nr=%s' % nr]
+        ctx.start_process(cmd, wait=True)
+        #os.system(self.cmdline + ' set_neighbor ' + addr + ' ssid=\\""' + ssid +
+        #            '"\\" nr=' + nr)
 
     def send_bss_transition(self, device, nr_list):
         # Send a BSS transition to a station (device). nr_list should be an
@@ -162,7 +177,8 @@ class HostapdCLI:
         # consistent with the set_neighbor() API, i.e. the same neighbor report
         # string could be used in both API's.
         pref = 1
-        cmd = self.cmdline + ' bss_tm_req ' + device
+        cmd = self.cmdline + ['bss_tm_req', device]
+        #cmd = self.cmdline + ' bss_tm_req ' + device
         for i in nr_list:
             addr = i[0]
             nr = i[1]
@@ -172,15 +188,13 @@ class HostapdCLI:
             chan_num=nr[10:12]
             phy_num=nr[14:16]
 
-            cmd += ' pref=%s neighbor=%s,%s,%s,%s,%s' % \
-                    (str(pref), addr, bss_info, op_class, chan_num, phy_num)
+            #cmd += ' pref=%s neighbor=%s,%s,%s,%s,%s' % \
+            #        (str(pref), addr, bss_info, op_class, chan_num, phy_num)
+            cmd += ['pref=%s' % str(pref), 'neighbor=%s,%s,%s,%s,%s' % (addr, bss_info, op_class, chan_num, phy_num)]
             pref += 1
 
-        os.system(cmd)
-
-    @staticmethod
-    def kill_all():
-        os.system('killall hostapd')
+        #os.system(cmd)
+        ctx.start_process(cmd, wait=True)
 
     def get_config_value(self, key):
         # first find the right config file
@@ -217,4 +231,6 @@ class HostapdCLI:
         '''
             Send a RRM Beacon request
         '''
-        os.system(self.cmdline + ' req_beacon ' + addr + ' ' + request)
+        cmd = self.cmdline + ['req_beacon', addr, request]
+        ctx.start_process(cmd, wait=True)
+        #os.system(self.cmdline + ' req_beacon ' + addr + ' ' + request)

@@ -108,6 +108,7 @@ class AsyncOpAbstract(object):
         self._exception = _convert_dbus_ex(ex)
 
     def _wait_for_async_op(self):
+        global mainloop
         context = mainloop.get_context()
         while not self._is_completed:
             context.iteration(may_block=True)
@@ -533,7 +534,7 @@ class Device(IWDDBusAbstract):
             if addr not in props['ConnectedPeers']:
                 return
 
-        GLib.timeout_add(int(30 * 1000), wait_timeout_cb)
+        GLib.timeout_add(int(50 * 1000), wait_timeout_cb)
         context = mainloop.get_context()
         while not self._adhoc_prop_found:
             context.iteration(may_block=True)
@@ -561,7 +562,7 @@ class Device(IWDDBusAbstract):
             if addr in props['ConnectedPeers']:
                 return
 
-        GLib.timeout_add(int(15 * 1000), wait_timeout_cb)
+        GLib.timeout_add(int(50 * 1000), wait_timeout_cb)
         context = mainloop.get_context()
         while not self._adhoc_prop_found:
             context.iteration(may_block=True)
@@ -617,7 +618,8 @@ class Network(IWDDBusAbstract):
 
         self._iface.Connect(dbus_interface=self._iface_name,
                             reply_handler=self._success,
-                            error_handler=self._failure)
+                            error_handler=self._failure,
+			    timeout=30)
 
         if wait:
             self._wait_for_async_op()
@@ -859,23 +861,28 @@ class IWD(AsyncOpAbstract):
     _iwd_proc = None
     _devices = None
     _instance = None
+    psk_agent = None
 
-    def __init__(self, start_iwd_daemon = True, iwd_config_dir = '/tmp'):
+    def __init__(self, start_iwd_daemon = False, iwd_config_dir = '/tmp'):
         global mainloop
         mainloop = GLib.MainLoop()
 
-        self._iwd_proc = None
+        #self._iwd_proc = None
+
+        if start_iwd_daemon and ctx.is_process_running('iwd'):
+            raise Exception("IWD requested to start but is already running")
 
         if start_iwd_daemon:
             self._iwd_proc = ctx.start_iwd(iwd_config_dir)
+            #self.wait(5)
 
         tries = 0
         while not self._bus.name_has_owner(IWD_SERVICE):
-            if ctx.args.gdb == 'None':
-                if tries > 100:
-                    if start_iwd_daemon:
-                        self._iwd_proc.kill()
-                        self._iwd_proc = None
+            if not ctx.args.gdb:
+                if tries > 200:
+                    #if start_iwd_daemon:
+                    #    self._iwd_proc.kill()
+                    #    self._iwd_proc = None
                     raise TimeoutError('IWD has failed to start')
                 tries += 1
             time.sleep(0.1)
@@ -887,8 +894,11 @@ class IWD(AsyncOpAbstract):
         IWD._instance = weakref.ref(self)
 
     def __del__(self):
-        if self._iwd_proc is None:
-            return
+        print("del IWD")
+        #if self._iwd_proc is None:
+        #    return
+        if self.psk_agent:
+            self.unregister_psk_agent(self.psk_agent)
 
         self._object_manager_if = None
         self._agent_manager_if = None
@@ -896,7 +906,12 @@ class IWD(AsyncOpAbstract):
         self._devices = None
 
         if self._iwd_proc is not None:
-            self._iwd_proc.kill()
+            #ctx.stop_iwd()
+            #self._iwd_proc = None
+            print("killing iwd from IWD()")
+            #self._iwd_proc.kill()
+            #self._iwd_proc = None
+            ctx.stop_process(self._iwd_proc)
             self._iwd_proc = None
 
     @property
@@ -917,7 +932,7 @@ class IWD(AsyncOpAbstract):
                                IWD_AGENT_MANAGER_INTERFACE)
         return self._agent_manager_if
 
-    def wait_for_object_condition(self, obj, condition_str, max_wait = 15):
+    def wait_for_object_condition(self, obj, condition_str, max_wait = 50):
         self._wait_timed_out = False
         def wait_timeout_cb():
             self._wait_timed_out = True
@@ -928,7 +943,7 @@ class IWD(AsyncOpAbstract):
             context = mainloop.get_context()
             while not eval(condition_str):
                 context.iteration(may_block=True)
-                if self._wait_timed_out and ctx.args.gdb == 'None':
+                if self._wait_timed_out and ctx.args.gdb == None:
                     raise TimeoutError('[' + condition_str + ']'\
                                        ' condition was not met in '\
                                        + str(max_wait) + ' sec')
@@ -986,7 +1001,7 @@ class IWD(AsyncOpAbstract):
     def remove_from_storage(file_name):
         os.system('rm -rf ' + IWD_STORAGE_DIR + '/\'' + file_name + '\'')
 
-    def list_devices(self, wait_to_appear = 0, max_wait = 15):
+    def list_devices(self, wait_to_appear = 0, max_wait = 50):
         if not wait_to_appear:
             return list(self._devices.values())
 
@@ -1028,6 +1043,7 @@ class IWD(AsyncOpAbstract):
                                      reply_handler=self._success,
                                      error_handler=self._failure)
         self._wait_for_async_op()
+        self.psk_agent = psk_agent
 
     def unregister_psk_agent(self, psk_agent):
         self._agent_manager.UnregisterAgent(
@@ -1036,6 +1052,7 @@ class IWD(AsyncOpAbstract):
                                      reply_handler=self._success,
                                      error_handler=self._failure)
         self._wait_for_async_op()
+        self.psk_agent = None
 
     @staticmethod
     def get_instance():

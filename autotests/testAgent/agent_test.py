@@ -10,6 +10,7 @@ from iwd import PSKAgent
 from iwd import NetworkType
 import testutil
 import subprocess
+from config import ctx
 
 class Test(unittest.TestCase):
 
@@ -57,7 +58,8 @@ class Test(unittest.TestCase):
     def test_connection_with_other_agent(self):
         wd = IWD()
 
-        iwctl = subprocess.Popen(['iwctl', '-P', 'secret_ssid2'])
+        iwctl = ctx.start_process(['iwctl', '-P', 'secret_ssid2']).pid
+        #iwctl = subprocess.Popen(['iwctl', '-P', 'secret_ssid2'])
         # Let iwctl to start and register its agent.
         wd.wait(2)
 
@@ -72,7 +74,8 @@ class Test(unittest.TestCase):
 
         wd = IWD()
 
-        iwctl = subprocess.Popen(['iwctl', '-P', 'secret_ssid2'])
+        iwctl = ctx.start_process(['iwctl', '-P', 'secret_ssid2']).pid
+        #iwctl = subprocess.Popen(['iwctl', '-P', 'secret_ssid2'])
         # Let iwctl to start and register its agent.
         wd.wait(2)
 

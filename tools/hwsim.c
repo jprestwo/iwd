@@ -1422,8 +1422,10 @@ static void process_frame(struct hwsim_frame *frame)
 
 		process_rules(frame->src_radio, radio, frame, &drop, &delay);
 
-		if (drop)
+		if (drop) {
+			l_info("Frame dropped");
 			continue;
+		}
 
 		send_info = l_new(struct send_frame_info, 1);
 		send_info->radio = radio;
@@ -2164,6 +2166,7 @@ static struct l_dbus_message *rule_property_set_drop(
 		return dbus_error_invalid_args(message);
 
 	rule->drop = bval;
+	l_info("setting drop");
 
 	return l_dbus_message_new_method_return(message);
 }
