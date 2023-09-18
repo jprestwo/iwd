@@ -341,20 +341,6 @@ static bool scan_mac_address_randomization_is_disabled(void)
 	return disabled;
 }
 
-static struct scan_freq_set *scan_get_allowed_freqs(struct scan_context *sc)
-{
-	struct scan_freq_set *allowed = scan_freq_set_new();
-
-	scan_freq_set_merge(allowed, wiphy_get_supported_freqs(sc->wiphy));
-
-	if (!wiphy_constrain_freq_set(sc->wiphy, allowed)) {
-		scan_freq_set_free(allowed);
-		allowed = NULL;
-	}
-
-	return allowed;
-}
-
 static struct l_genl_msg *scan_build_cmd(struct scan_context *sc,
 					bool ignore_flush_flag, bool is_passive,
 					const struct scan_parameters *params,
@@ -584,7 +570,10 @@ static void scan_cmds_add(struct scan_request *sr, struct scan_context *sc,
 {
 	unsigned int i;
 	struct scan_freq_set *subsets[2] = { 0 };
-	struct scan_freq_set *allowed = scan_get_allowed_freqs(sc);
+	struct scan_freq_set *allowed = wiphy_get_allowed_freqs(sc->wiphy,
+							BAND_FREQ_2_4_GHZ |
+							BAND_FREQ_5_GHZ |
+							BAND_FREQ_6_GHZ);
 	const struct scan_freq_set *supported =
 					wiphy_get_supported_freqs(sc->wiphy);
 
@@ -1918,9 +1907,7 @@ static void scan_wiphy_watch(struct wiphy *wiphy,
 	struct scan_request *sr = NULL;
 	struct l_genl_msg *msg = NULL;
 	struct scan_parameters params = { 0 };
-	struct scan_freq_set *freqs_6ghz;
-	struct scan_freq_set *allowed;
-	bool allow_6g;
+	_auto_(scan_freq_set_free) struct scan_freq_set *allowed = NULL;
 
 	/* Only care about completed regulatory dumps */
 	if (event != WIPHY_STATE_WATCH_EVENT_REGDOM_DONE)
@@ -1934,16 +1921,15 @@ static void scan_wiphy_watch(struct wiphy *wiphy,
 	if (!sr)
 		return;
 
-	allowed = scan_get_allowed_freqs(sc);
-	allow_6g = scan_freq_set_get_bands(allowed) & BAND_FREQ_6_GHZ;
+	allowed = wiphy_get_allowed_freqs(sc->wiphy, BAND_FREQ_6_GHZ);
 
 	/*
 	 * This update did not allow 6GHz, or the original request was
 	 * not expecting 6GHz. The periodic scan should now be ended.
 	 */
-	if (!allow_6g || !sr->split) {
+	if (!allowed || !sr->split) {
 		scan_get_results(sc, sr, sr->freqs_scanned);
-		goto free_allowed;
+		return;
 	}
 
 	/*
@@ -1951,12 +1937,8 @@ static void scan_wiphy_watch(struct wiphy *wiphy,
 	 * Create a new 6GHz passive scan request and append to the
 	 * command list
 	 */
-	freqs_6ghz = scan_freq_set_clone(allowed, BAND_FREQ_6_GHZ);
-
-	msg = scan_build_cmd(sc, false, true, &params, freqs_6ghz);
+	msg = scan_build_cmd(sc, false, true, &params, allowed);
 	l_queue_push_tail(sr->cmds, msg);
-
-	scan_freq_set_free(freqs_6ghz);
 
 	/*
 	 * If this periodic scan is at the top of the queue, continue
@@ -1964,9 +1946,6 @@ static void scan_wiphy_watch(struct wiphy *wiphy,
 	 */
 	if (l_queue_peek_head(sc->requests) == sr)
 		start_next_scan_request(&sr->work);
-
-free_allowed:
-	scan_freq_set_free(allowed);
 }
 
 static struct scan_context *scan_context_new(uint64_t wdev_id)
